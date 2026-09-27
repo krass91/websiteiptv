@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StorageEngine } from '../services/storage';
+import { useAuth } from '../services/authContext';
 import { 
   ShieldCheck, 
   Lock, 
@@ -12,7 +12,8 @@ import {
   Radio,
   Sparkles,
   Calendar,
-  MessageSquare
+  MessageSquare,
+  Search
 } from 'lucide-react';
 
 interface LandingHeroProps {
@@ -21,10 +22,16 @@ interface LandingHeroProps {
 }
 
 export const LandingHero: React.FC<LandingHeroProps> = ({ onOpenRegister, onOpenLogin }) => {
-  const allUsers = StorageEngine.getUsers();
-  const allPosts = StorageEngine.getPosts();
+  const { allUsers, allPosts, setIsUserSearchOpen } = useAuth();
+  const [userQuery, setUserQuery] = useState('');
 
   const [selectedUserModal, setSelectedUserModal] = useState<any>(null);
+
+  const displayedUsers = allUsers.filter(u => {
+    if (!userQuery.trim()) return true;
+    const q = userQuery.toLowerCase();
+    return u.username.toLowerCase().includes(q) || (u.bio || '').toLowerCase().includes(q) || u.role.toLowerCase().includes(q);
+  });
 
   return (
     <div className="relative overflow-hidden space-y-16">
@@ -97,22 +104,44 @@ export const LandingHero: React.FC<LandingHeroProps> = ({ onOpenRegister, onOpen
           <div>
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-emerald-400 mb-1">
               <Eye className="h-4 w-4" />
-              <span>Открита общност</span>
+              <span>Открита общност · Споделена база данни</span>
             </div>
             <h2 className="text-2xl font-bold text-white">
               Потребителски профили & Куратори
             </h2>
             <p className="text-xs sm:text-sm text-slate-400">
-              Вижте членовете на общността, техните описания и темите, по които пишат.
+              Всеки регистриран потребител е видим в общата база данни, независимо от IP адреса.
             </p>
           </div>
-          <span className="text-xs font-mono text-slate-400 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg self-start sm:self-auto">
-            {allUsers.length} видими профила
-          </span>
+
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => setIsUserSearchOpen(true)}
+              className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-xl transition-colors shadow-sm"
+            >
+              <Search className="h-3.5 w-3.5" />
+              <span>Търси в пълната база данни</span>
+            </button>
+            <span className="text-xs font-mono text-slate-400 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg">
+              {allUsers.length} регистрирани
+            </span>
+          </div>
+        </div>
+
+        {/* Quick inline search on landing page */}
+        <div className="relative mb-6 max-w-md">
+          <Search className="absolute left-3.5 top-2.5 h-4 w-4 text-slate-500" />
+          <input
+            type="text"
+            value={userQuery}
+            onChange={e => setUserQuery(e.target.value)}
+            placeholder="Филтрирай потребители по име или био..."
+            className="w-full pl-10 pr-4 py-2 text-xs bg-slate-900/90 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+          />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {allUsers.map(user => {
+          {displayedUsers.map(user => {
             const userPosts = allPosts.filter(p => p.userId === user.id);
             const isAdmin = user.role === 'admin';
 

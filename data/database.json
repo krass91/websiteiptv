@@ -1,0 +1,102 @@
+{
+  "users": [
+    {
+      "id": "user_krasimir_admin",
+      "email": "krasimirkiryakov7@gmail.com",
+      "username": "krasimir_admin",
+      "passwordHash": "7e10e680521bd38aed46b9f53f208642992a6d1513eb24f88b0d631a38c0be46c0dbd38128f1a05efda0ab62bcbffa193962fedb5c85af92340f0f65faef8fcb",
+      "salt": "streamportal_salt_admin_2026",
+      "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+      "bio": "Главен администратор на Dark IPTV. Пълен контрол над порталите и потребителите.",
+      "isVerified": true,
+      "createdAt": "2026-09-27T12:57:15.175Z",
+      "role": "admin",
+      "privacy": {
+        "allowFriendRequests": true,
+        "allowFollowers": true,
+        "showEmail": false
+      },
+      "plainPassword": "admin"
+    },
+    {
+      "id": "user_alex",
+      "email": "alex@iptv-prive.net",
+      "username": "alex_iptv",
+      "passwordHash": "ffe1d7c9dfde38a71eaa619ace16615edc1841e4777b5a82789576f638a29ef3485da857fd607d8fa8d797a9f70664dd16e85981b401291603f32a92b53ebbc5",
+      "salt": "streamportal_salt_admin_2026",
+      "avatar": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
+      "bio": "IPTV ентусиаст и куратор. Очаквайте скоро първите тествани стриймове!",
+      "isVerified": true,
+      "createdAt": "2026-03-01T10:00:00Z",
+      "role": "moderator",
+      "privacy": {
+        "allowFriendRequests": true,
+        "allowFollowers": true,
+        "showEmail": false
+      },
+      "plainPassword": "password123"
+    },
+    {
+      "id": "user_georgi",
+      "email": "georgi@streams.bg",
+      "username": "georgi_streams",
+      "passwordHash": "ffe1d7c9dfde38a71eaa619ace16615edc1841e4777b5a82789576f638a29ef3485da857fd607d8fa8d797a9f70664dd16e85981b401291603f32a92b53ebbc5",
+      "salt": "streamportal_salt_admin_2026",
+      "avatar": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
+      "bio": "Спортен фен. Подготвям листи за Diema Sport и Max Sport в 50 FPS.",
+      "isVerified": true,
+      "createdAt": "2026-03-10T14:30:00Z",
+      "role": "member",
+      "privacy": {
+        "allowFriendRequests": true,
+        "allowFollowers": true,
+        "showEmail": false
+      },
+      "plainPassword": "password123"
+    },
+    {
+      "id": "user_elena",
+      "email": "elena@sat-hub.org",
+      "username": "elena_sat",
+      "passwordHash": "ffe1d7c9dfde38a71eaa619ace16615edc1841e4777b5a82789576f638a29ef3485da857fd607d8fa8d797a9f70664dd16e85981b401291603f32a92b53ebbc5",
+      "salt": "streamportal_salt_admin_2026",
+      "avatar": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
+      "bio": "Документални и филмови канали. Нова в общността.",
+      "isVerified": true,
+      "createdAt": "2026-03-18T09:15:00Z",
+      "role": "member",
+      "privacy": {
+        "allowFriendRequests": true,
+        "allowFollowers": true,
+        "showEmail": false
+      },
+      "plainPassword": "password123"
+    },
+    {
+      "id": "user_admin_krasimirkiryakov927",
+      "email": "krasimirkiryakov927@gmail.com",
+      "username": "krasimirkiryakov927",
+      "passwordHash": "7e10e680521bd38aed46b9f53f208642992a6d1513eb24f88b0d631a38c0be46c0dbd38128f1a05efda0ab62bcbffa193962fedb5c85af92340f0f65faef8fcb",
+      "salt": "streamportal_salt_admin_2026",
+      "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+      "bio": "Главен администратор на Dark IPTV. Пълен контрол над порталите и потребителите.",
+      "isVerified": true,
+      "createdAt": "2026-09-27T13:03:43.033Z",
+      "role": "admin",
+      "privacy": {
+        "allowFriendRequests": true,
+        "allowFollowers": true,
+        "showEmail": false
+      },
+      "plainPassword": "admin",
+      "registeredIp": "127.0.0.1"
+    }
+  ],
+  "posts": [],
+  "friendships": [],
+  "follows": [],
+  "friendRequests": [],
+  "directMessages": [],
+  "notifications": [],
+  "savedAt": "2026-09-27T13:03:59.078Z"
+}

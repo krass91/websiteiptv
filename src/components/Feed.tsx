@@ -17,24 +17,39 @@ import {
   Calendar, 
   Radio, 
   ExternalLink, 
-  Search,
-  Filter,
-  Eye,
-  Trash2,
-  Edit,
-  Sparkles,
-  Heart
+  Search, 
+  Filter, 
+  Eye, 
+  Trash2, 
+  Edit, 
+  Sparkles, 
+  Heart,
+  Plus,
+  Send,
+  MessageCircle,
+  HelpCircle,
+  Quote,
+  User as UserIcon
 } from 'lucide-react';
 
 interface FeedProps {
   onOpenEdit: (post: Post) => void;
   filterUserOnly?: boolean;
-  onSelectUser?: (userId: string) => void;
+  onSelectUser?: (userId: string, tab?: 'wall' | 'messages') => void;
+  onOpenCreate?: (category?: PostCategory) => void;
 }
 
-export const Feed: React.FC<FeedProps> = ({ onOpenEdit, filterUserOnly = false, onSelectUser }) => {
+export const Feed: React.FC<FeedProps> = ({ 
+  onOpenEdit, 
+  filterUserOnly = false, 
+  onSelectUser,
+  onOpenCreate 
+}) => {
   const { 
     currentUser, 
+    allPosts,
+    allUsers,
+    setIsUserSearchOpen,
     reactToPost, 
     addComment, 
     deletePost,
@@ -49,8 +64,16 @@ export const Feed: React.FC<FeedProps> = ({ onOpenEdit, filterUserOnly = false, 
   const [newCommentText, setNewCommentText] = useState<string>('');
   const [rawM3uPreviewPost, setRawM3uPreviewPost] = useState<Post | null>(null);
 
-  // Requirement: strict visibility enforcement via StorageEngine.getAuthorizedPosts(currentUser)
-  const accessiblePosts = StorageEngine.getAuthorizedPosts(currentUser);
+  // Strict visibility enforcement via reactive allPosts from server database
+  const accessiblePosts = allPosts.filter(post => {
+    if (!currentUser) return false;
+    if (currentUser.role === 'admin') return true;
+    if (post.userId === currentUser.id) return true;
+    if (post.visibility === 'private') return false;
+    if (post.visibility === 'friends') return StorageEngine.areFriends(currentUser.id, post.userId);
+    if (post.visibility === 'public') return true;
+    return false;
+  });
 
   // Apply filters
   let filteredPosts = accessiblePosts;
@@ -72,6 +95,7 @@ export const Feed: React.FC<FeedProps> = ({ onOpenEdit, filterUserOnly = false, 
     filteredPosts = filteredPosts.filter(p => 
       p.title.toLowerCase().includes(q) ||
       p.description.toLowerCase().includes(q) ||
+      p.authorName.toLowerCase().includes(q) ||
       (p.content.regions && p.content.regions.some(r => r.toLowerCase().includes(q))) ||
       (p.content.portalUrl && p.content.portalUrl.toLowerCase().includes(q)) ||
       (p.content.macAddress && p.content.macAddress.toLowerCase().includes(q))
@@ -104,18 +128,125 @@ export const Feed: React.FC<FeedProps> = ({ onOpenEdit, filterUserOnly = false, 
     URL.revokeObjectURL(url);
   };
 
-  const getCategoryLabel = (cat: PostCategory) => {
+  const thoughtsCount = accessiblePosts.filter(p => p.category === 'thought').length;
+  const m3uCount = accessiblePosts.filter(p => p.category === 'm3u').length;
+  const portalCount = accessiblePosts.filter(p => p.category === 'portal').length;
+  const macCount = accessiblePosts.filter(p => p.category === 'mac').length;
+  const bundleCount = accessiblePosts.filter(p => p.category === 'bundle').length;
+
+  const getCategoryBadge = (cat: PostCategory, authorName?: string) => {
     switch (cat) {
-      case 'm3u': return 'IPTV M3U Плейлист';
-      case 'portal': return 'Stalker / Xtream Портал';
-      case 'mac': return 'MAC Адрес';
-      case 'bundle': return 'Комбиниран пакет';
+      case 'thought':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-purple-500/15 border border-purple-500/40 text-purple-300">
+            <MessageSquare className="h-3 w-3 text-purple-400" />
+            <span>💬 Какво мисли {authorName || ''}</span>
+          </span>
+        );
+      case 'm3u':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-cyan-500/15 border border-cyan-500/40 text-cyan-300">
+            <Tv className="h-3 w-3 text-cyan-400" />
+            <span>📺 M3U Стрийм Листа</span>
+          </span>
+        );
+      case 'portal':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/15 border border-emerald-500/40 text-emerald-300">
+            <Globe className="h-3 w-3 text-emerald-400" />
+            <span>🌐 Stalker Портал</span>
+          </span>
+        );
+      case 'mac':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/15 border border-amber-500/40 text-amber-300">
+            <Radio className="h-3 w-3 text-amber-400" />
+            <span>🔑 MAC Ключ</span>
+          </span>
+        );
+      case 'bundle':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-500/15 border border-indigo-500/40 text-indigo-300">
+            <Sparkles className="h-3 w-3 text-indigo-400" />
+            <span>📦 VIP Пакет</span>
+          </span>
+        );
     }
   };
 
   return (
     <div className="space-y-6">
-      {/* Top Search & Filter Bar */}
+      {/* 1. SOCIAL QUICK COMPOSER RIBBON (Requirement: "вижда кой публикува в сайта дали пост публикация какво мисли или стрим листа, мак или портал") */}
+      {!filterUserOnly && currentUser && (
+        <div className="p-4 rounded-2xl border border-slate-800 bg-slate-900/80 backdrop-blur-sm shadow-md">
+          <div className="flex items-center gap-3 pb-3 border-b border-slate-800/80">
+            <img
+              src={currentUser.avatar}
+              alt={currentUser.username}
+              referrerPolicy="no-referrer"
+              className="h-10 w-10 rounded-xl object-cover border border-slate-700 shrink-0"
+            />
+            <button
+              type="button"
+              onClick={() => onOpenCreate?.('thought')}
+              className="flex-1 text-left py-2.5 px-4 rounded-xl bg-slate-950 border border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700 transition-colors text-xs sm:text-sm"
+            >
+              Какво мислите днес, <span className="text-white font-semibold">{currentUser.username}</span>? Споделете мисъл, статус или питане...
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between gap-2 pt-3 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => onOpenCreate?.('thought')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-purple-950/60 border border-purple-800/60 text-purple-300 hover:bg-purple-900/60 transition-colors"
+              >
+                <MessageSquare className="h-3.5 w-3.5 text-purple-400" />
+                <span>Сподели мисъл</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onOpenCreate?.('m3u')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-cyan-950/60 border border-cyan-800/60 text-cyan-300 hover:bg-cyan-900/60 transition-colors"
+              >
+                <Tv className="h-3.5 w-3.5 text-cyan-400" />
+                <span>Стрийм листа (M3U)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onOpenCreate?.('portal')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 hover:bg-emerald-900/60 transition-colors"
+              >
+                <Globe className="h-3.5 w-3.5 text-emerald-400" />
+                <span>Stalker Портал</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onOpenCreate?.('mac')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-950/60 border border-amber-800/60 text-amber-300 hover:bg-amber-900/60 transition-colors"
+              >
+                <Radio className="h-3.5 w-3.5 text-amber-400" />
+                <span>MAC Адрес</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onOpenCreate?.('thought')}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold text-slate-950 bg-emerald-400 hover:bg-emerald-300 transition-colors shadow-sm ml-auto"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>Публикувай</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 2. TOP SEARCH & FILTER BAR */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 rounded-2xl border border-slate-800 bg-slate-900/60 backdrop-blur-sm">
         {/* Search Input */}
         <div className="relative flex-1">
@@ -124,7 +255,7 @@ export const Feed: React.FC<FeedProps> = ({ onOpenEdit, filterUserOnly = false, 
             type="text"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Търсене по заглавие, канали, държави, MAC..."
+            placeholder="Търсене по автор, мисли, заглавие, държави, MAC..."
             className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
           />
         </div>
@@ -132,10 +263,12 @@ export const Feed: React.FC<FeedProps> = ({ onOpenEdit, filterUserOnly = false, 
         {/* Category Filter Tabs */}
         <div className="flex items-center gap-1 p-1 bg-slate-950 border border-slate-800 rounded-xl overflow-x-auto">
           {[
-            { id: 'all', label: 'Всички' },
-            { id: 'm3u', label: 'M3U' },
-            { id: 'portal', label: 'Портали' },
-            { id: 'mac', label: 'MAC' },
+            { id: 'all', label: `Всички (${accessiblePosts.length})` },
+            { id: 'thought', label: `💬 Какво мисли (${thoughtsCount})` },
+            { id: 'm3u', label: `📺 M3U Листи (${m3uCount})` },
+            { id: 'portal', label: `🌐 Портали (${portalCount})` },
+            { id: 'mac', label: `🔑 MAC (${macCount})` },
+            { id: 'bundle', label: `📦 Пакети (${bundleCount})` },
           ].map(tab => (
             <button
               key={tab.id}
@@ -173,12 +306,22 @@ export const Feed: React.FC<FeedProps> = ({ onOpenEdit, filterUserOnly = false, 
             ))}
           </div>
         )}
+
+        {/* Quick User Search in Full DB */}
+        <button
+          onClick={() => setIsUserSearchOpen(true)}
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 hover:text-emerald-400 hover:border-emerald-500/40 transition-colors whitespace-nowrap self-end sm:self-auto"
+          title="Търсене на потребители в цялата база данни"
+        >
+          <Users className="h-3.5 w-3.5 text-emerald-400" />
+          <span>Потребители ({allUsers.length})</span>
+        </button>
       </div>
 
       {/* Posts Count Indicator */}
       <div className="flex items-center justify-between text-xs text-slate-400 px-1">
-        <span>Показани {filteredPosts.length} публикации според вашите права за достъп</span>
-        <span className="font-mono text-[11px] text-emerald-400">Частен криптиран feed</span>
+        <span>Показани {filteredPosts.length} публикации на фийд стената</span>
+        <span className="font-mono text-[11px] text-emerald-400">Публична & Частна стена с контрол на видимост</span>
       </div>
 
       {/* Empty State */}
@@ -191,12 +334,21 @@ export const Feed: React.FC<FeedProps> = ({ onOpenEdit, filterUserOnly = false, 
           <p className="mt-1 text-xs text-slate-400 max-w-sm mx-auto">
             {searchQuery 
               ? 'Опитайте да промените критериите за търсене или филтрите.'
-              : 'Все още няма публикации с това ниво на видимост. Създайте първата си публикация!'}
+              : 'Все още няма споделени публикации в тази категория. Бъдете първият, който публикува!'}
           </p>
+          {currentUser && (
+            <button
+              onClick={() => onOpenCreate?.('thought')}
+              className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-xl transition-colors shadow-sm"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>Сподели мисъл или стрийм</span>
+            </button>
+          )}
         </div>
       )}
 
-      {/* Posts List */}
+      {/* 3. POSTS FEED WALL */}
       <div className="space-y-5">
         {filteredPosts.map(post => {
           const isAuthor = currentUser?.id === post.userId;
@@ -207,44 +359,64 @@ export const Feed: React.FC<FeedProps> = ({ onOpenEdit, filterUserOnly = false, 
           return (
             <article
               key={post.id}
-              className="rounded-2xl border border-slate-800 bg-slate-900/50 backdrop-blur-sm p-5 hover:border-slate-700/80 transition-all shadow-sm"
+              className={`rounded-2xl border transition-all shadow-sm p-5 backdrop-blur-sm ${
+                post.category === 'thought'
+                  ? 'border-purple-900/30 bg-slate-900/70 hover:border-purple-700/60'
+                  : 'border-slate-800 bg-slate-900/50 hover:border-slate-700/80'
+              }`}
             >
-              {/* Header: Clean unboxed metadata with typographic separators */}
+              {/* Header: WHO POSTS & CATEGORY BADGE */}
               <div className="flex items-start justify-between gap-4 mb-3">
                 <div className="flex items-center gap-3">
                   <button
                     type="button"
                     onClick={() => onSelectUser?.(post.userId)}
-                    className="shrink-0 hover:opacity-85 transition-opacity text-left"
-                    title={`Отвори стената на ${post.authorName}`}
+                    className="shrink-0 hover:opacity-85 transition-opacity text-left relative group"
+                    title={`Отвори стената и профила на ${post.authorName}`}
                   >
                     <img
                       src={post.authorAvatar}
                       alt={post.authorName}
                       referrerPolicy="no-referrer"
-                      className="h-10 w-10 rounded-xl object-cover border border-slate-700 hover:border-emerald-500 transition-colors"
+                      className="h-11 w-11 rounded-xl object-cover border border-slate-700 group-hover:border-emerald-400 transition-colors"
                     />
                   </button>
+
                   <div>
-                    <div className="flex items-center gap-2">
+                    {/* Author & Badge Row */}
+                    <div className="flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
                         onClick={() => onSelectUser?.(post.userId)}
-                        className="text-sm font-bold text-white hover:text-emerald-400 transition-colors text-left"
+                        className="text-sm font-bold text-white hover:text-emerald-400 transition-colors text-left flex items-center gap-1.5"
                         title={`Отвори стената на ${post.authorName}`}
                       >
-                        {post.authorName}
+                        <span>{post.authorName}</span>
                       </button>
+
+                      {/* Role badge */}
+                      {post.authorName.toLowerCase().includes('admin') || post.userId.includes('admin') ? (
+                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-400 text-slate-950 uppercase">
+                          Администратор
+                        </span>
+                      ) : (
+                        <span className="text-[9px] font-medium text-slate-400 bg-slate-800 px-1.5 py-0.2 rounded">
+                          Член
+                        </span>
+                      )}
+
                       {isAuthor && (
                         <span className="text-[10px] font-medium text-emerald-400 bg-emerald-950/60 px-1.5 py-0.2 rounded border border-emerald-800/50">
                           Вие
                         </span>
                       )}
+
+                      {/* TYPE OF POST BADGE */}
+                      {getCategoryBadge(post.category, post.authorName)}
                     </div>
-                    {/* Unboxed Metadata (Zero-Pill Rule) */}
-                    <div className="flex items-center gap-2 text-xs text-slate-400">
-                      <span>{getCategoryLabel(post.category)}</span>
-                      <span aria-hidden="true">·</span>
+
+                    {/* Metadata line & Quick social actions with author */}
+                    <div className="flex items-center gap-2 text-xs text-slate-400 mt-1 flex-wrap">
                       <span className="flex items-center gap-1">
                         {post.visibility === 'public' && (
                           <>
@@ -267,6 +439,36 @@ export const Feed: React.FC<FeedProps> = ({ onOpenEdit, filterUserOnly = false, 
                       </span>
                       <span aria-hidden="true">·</span>
                       <span>{new Date(post.createdAt).toLocaleDateString('bg-BG')}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="font-mono text-[10px] text-slate-500">
+                        {new Date(post.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+
+                      {/* Quick social actions to interact with author */}
+                      <span aria-hidden="true">·</span>
+                      <div className="inline-flex items-center gap-1.5">
+                        {!isAuthor && currentUser && (
+                          <button
+                            type="button"
+                            onClick={() => onSelectUser?.(post.userId, 'messages')}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-purple-950/70 border border-purple-800/70 text-purple-300 hover:bg-purple-900 hover:text-white transition-colors"
+                            title={`Пиши лично съобщение на ${post.authorName}`}
+                          >
+                            <MessageSquare className="h-3 w-3 text-purple-400" />
+                            <span>Пиши съобщение</span>
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => onSelectUser?.(post.userId, 'wall')}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                          title={`Отвори стената и профила на ${post.authorName}`}
+                        >
+                          <UserIcon className="h-3 w-3 text-emerald-400" />
+                          <span>Стена на автора</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -297,160 +499,215 @@ export const Feed: React.FC<FeedProps> = ({ onOpenEdit, filterUserOnly = false, 
                 )}
               </div>
 
-              {/* Title & Description */}
+              {/* Title Header */}
               <h3 className="text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
                 {post.title}
               </h3>
-              <p className="mt-1.5 text-xs sm:text-sm text-slate-300 leading-relaxed">
-                {post.description}
-              </p>
 
-              {/* IPTV Content Card Section */}
-              <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950 p-3.5 space-y-3">
-                {/* 1. Portal URL */}
-                {post.content.portalUrl && (
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 rounded-lg bg-slate-900/80 border border-slate-800/80">
-                    <div className="flex items-center gap-2 overflow-hidden">
-                      <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider shrink-0">
-                        Портал URL:
-                      </span>
-                      <code className="text-xs font-mono text-emerald-400 truncate">
-                        {post.content.portalUrl}
-                      </code>
-                    </div>
-                    <button
-                      onClick={() => handleCopy(post.content.portalUrl!, `portal_${post.id}`)}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-md transition-colors shrink-0 self-end sm:self-auto"
-                    >
-                      {copiedKey === `portal_${post.id}` ? (
-                        <>
-                          <Check className="h-3.5 w-3.5 text-emerald-400" />
-                          <span>Копиран</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="h-3.5 w-3.5" />
-                          <span>Копирай URL</span>
-                        </>
-                      )}
-                    </button>
+              {/* CONTENT RENDERING: IF THOUGHT (МИСЪЛ) vs IPTV TECHNICAL DATA */}
+              {post.category === 'thought' ? (
+                <div className="mt-3 p-4 rounded-xl border border-purple-900/40 bg-purple-950/20 backdrop-blur-sm relative overflow-hidden">
+                  <div className="absolute top-2 right-3 opacity-10 text-purple-400 pointer-events-none">
+                    <Quote className="h-16 w-16" />
                   </div>
-                )}
+                  <div className="relative">
+                    <p className="text-sm sm:text-base text-slate-100 leading-relaxed font-normal whitespace-pre-wrap">
+                      {post.description}
+                    </p>
 
-                {/* 2. MAC Address */}
-                {post.content.macAddress && (
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 rounded-lg bg-slate-900/80 border border-slate-800/80">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider shrink-0">
-                        MAC Адрес:
-                      </span>
-                      <code className="text-sm font-mono font-bold text-amber-400 tracking-wider">
-                        {post.content.macAddress}
-                      </code>
-                    </div>
-                    <button
-                      onClick={() => handleCopy(post.content.macAddress!, `mac_${post.id}`)}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-md transition-colors shrink-0 self-end sm:self-auto"
-                    >
-                      {copiedKey === `mac_${post.id}` ? (
-                        <>
-                          <Check className="h-3.5 w-3.5 text-emerald-400" />
-                          <span>Копиран</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="h-3.5 w-3.5" />
-                          <span>Копирай MAC</span>
-                        </>
-                      )}
-                    </button>
+                    {post.content.notes && (
+                      <div className="mt-3 pt-2 border-t border-purple-900/30 text-xs text-purple-300/80 flex items-center gap-1.5">
+                        <Sparkles className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                        <span>Бележка: {post.content.notes}</span>
+                      </div>
+                    )}
+
+                    {/* Optional stream data attached to thought */}
+                    {(post.content.portalUrl || post.content.m3uUrl || post.content.macAddress) && (
+                      <div className="mt-3 pt-3 border-t border-purple-900/40 space-y-2">
+                        <span className="text-[11px] font-semibold text-purple-300 block">
+                          Прикачени данни към мисълта:
+                        </span>
+                        {post.content.portalUrl && (
+                          <div className="flex items-center justify-between p-2 rounded-lg bg-slate-950 border border-slate-800">
+                            <span className="text-xs font-mono text-emerald-400 truncate">{post.content.portalUrl}</span>
+                            <button
+                              onClick={() => handleCopy(post.content.portalUrl!, `portal_${post.id}`)}
+                              className="px-2 py-0.5 text-[11px] rounded bg-slate-800 text-slate-200 hover:text-white"
+                            >
+                              {copiedKey === `portal_${post.id}` ? 'Копиран' : 'Копирай'}
+                            </button>
+                          </div>
+                        )}
+                        {post.content.m3uUrl && (
+                          <div className="flex items-center justify-between p-2 rounded-lg bg-slate-950 border border-slate-800">
+                            <span className="text-xs font-mono text-cyan-400 truncate">{post.content.m3uUrl}</span>
+                            <button
+                              onClick={() => handleCopy(post.content.m3uUrl!, `m3u_${post.id}`)}
+                              className="px-2 py-0.5 text-[11px] rounded bg-slate-800 text-slate-200 hover:text-white"
+                            >
+                              {copiedKey === `m3u_${post.id}` ? 'Копиран' : 'Копирай'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                )}
-
-                {/* 3. M3U Link / Download */}
-                {post.content.m3uUrl && (
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 rounded-lg bg-slate-900/80 border border-slate-800/80">
-                    <div className="flex items-center gap-2 overflow-hidden">
-                      <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider shrink-0">
-                        M3U Линк:
-                      </span>
-                      <code className="text-xs font-mono text-cyan-400 truncate">
-                        {post.content.m3uUrl}
-                      </code>
-                    </div>
-                    <div className="flex items-center gap-1.5 self-end sm:self-auto">
-                      <button
-                        onClick={() => handleCopy(post.content.m3uUrl!, `m3u_${post.id}`)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-md transition-colors"
-                      >
-                        {copiedKey === `m3u_${post.id}` ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-                        <span>Копирай</span>
-                      </button>
-                      <button
-                        onClick={() => downloadM3uFile(post)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-emerald-300 hover:text-emerald-200 bg-emerald-950/70 border border-emerald-800/60 rounded-md transition-colors"
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                        <span>Свали .m3u</span>
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* 4. Raw M3U Preview Button */}
-                {post.content.rawM3u && (
-                  <div className="flex items-center justify-between p-2 rounded-lg bg-slate-900/80 border border-slate-800/80">
-                    <span className="text-xs text-slate-300 font-medium">
-                      Вградено M3U съдържание ({post.content.rawM3u.split('\n').length} реда)
-                    </span>
-                    <button
-                      onClick={() => setRawM3uPreviewPost(post)}
-                      className="px-2.5 py-1 text-xs font-medium text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-md transition-colors flex items-center gap-1.5"
-                    >
-                      <Eye className="h-3.5 w-3.5 text-emerald-400" />
-                      <span>Преглед на плейлиста</span>
-                    </button>
-                  </div>
-                )}
-
-                {/* Additional Spec Attributes: Clean Inline Text with separators */}
-                <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-slate-400">
-                  {post.content.channelsCount && (
-                    <span>Канали: <strong className="text-slate-200 font-mono">{post.content.channelsCount}</strong></span>
-                  )}
-                  {post.content.expiryDate && (
-                    <>
-                      <span aria-hidden="true">·</span>
-                      <span>Валиден до: <strong className="text-emerald-400 font-mono">{post.content.expiryDate}</strong></span>
-                    </>
-                  )}
-                  {post.content.serverSpeed && (
-                    <>
-                      <span aria-hidden="true">·</span>
-                      <span>Сървър: <strong className="text-slate-200">{post.content.serverSpeed}</strong></span>
-                    </>
-                  )}
-                  {post.content.regions && post.content.regions.length > 0 && (
-                    <>
-                      <span aria-hidden="true">·</span>
-                      <span>Региони: <strong className="text-slate-200">{post.content.regions.join(', ')}</strong></span>
-                    </>
-                  )}
                 </div>
-
-                {post.content.notes && (
-                  <p className="text-[11px] text-slate-400 italic border-t border-slate-800/60 pt-2">
-                    Бележка: {post.content.notes}
+              ) : (
+                <>
+                  <p className="mt-1.5 text-xs sm:text-sm text-slate-300 leading-relaxed">
+                    {post.description}
                   </p>
-                )}
-              </div>
+
+                  {/* IPTV Technical Content Card */}
+                  <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950 p-3.5 space-y-3">
+                    {/* 1. Portal URL */}
+                    {post.content.portalUrl && (
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 rounded-lg bg-slate-900/80 border border-slate-800/80">
+                        <div className="flex items-center gap-2 overflow-hidden">
+                          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider shrink-0">
+                            Портал URL:
+                          </span>
+                          <code className="text-xs font-mono text-emerald-400 truncate">
+                            {post.content.portalUrl}
+                          </code>
+                        </div>
+                        <button
+                          onClick={() => handleCopy(post.content.portalUrl!, `portal_${post.id}`)}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-md transition-colors shrink-0 self-end sm:self-auto"
+                        >
+                          {copiedKey === `portal_${post.id}` ? (
+                            <>
+                              <Check className="h-3.5 w-3.5 text-emerald-400" />
+                              <span>Копиран</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="h-3.5 w-3.5" />
+                              <span>Копирай URL</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* 2. MAC Address */}
+                    {post.content.macAddress && (
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 rounded-lg bg-slate-900/80 border border-slate-800/80">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider shrink-0">
+                            MAC Адрес:
+                          </span>
+                          <code className="text-sm font-mono font-bold text-amber-400 tracking-wider">
+                            {post.content.macAddress}
+                          </code>
+                        </div>
+                        <button
+                          onClick={() => handleCopy(post.content.macAddress!, `mac_${post.id}`)}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-md transition-colors shrink-0 self-end sm:self-auto"
+                        >
+                          {copiedKey === `mac_${post.id}` ? (
+                            <>
+                              <Check className="h-3.5 w-3.5 text-emerald-400" />
+                              <span>Копиран</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="h-3.5 w-3.5" />
+                              <span>Копирай MAC</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* 3. M3U Link / Download */}
+                    {post.content.m3uUrl && (
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 rounded-lg bg-slate-900/80 border border-slate-800/80">
+                        <div className="flex items-center gap-2 overflow-hidden">
+                          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider shrink-0">
+                            M3U Линк:
+                          </span>
+                          <code className="text-xs font-mono text-cyan-400 truncate">
+                            {post.content.m3uUrl}
+                          </code>
+                        </div>
+                        <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                          <button
+                            onClick={() => handleCopy(post.content.m3uUrl!, `m3u_${post.id}`)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-md transition-colors"
+                          >
+                            {copiedKey === `m3u_${post.id}` ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                            <span>Копирай</span>
+                          </button>
+                          <button
+                            onClick={() => downloadM3uFile(post)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-emerald-300 hover:text-emerald-200 bg-emerald-950/70 border border-emerald-800/60 rounded-md transition-colors"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            <span>Свали .m3u</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 4. Raw M3U Preview Button */}
+                    {post.content.rawM3u && (
+                      <div className="flex items-center justify-between p-2 rounded-lg bg-slate-900/80 border border-slate-800/80">
+                        <span className="text-xs text-slate-300 font-medium">
+                          Вградено M3U съдържание ({post.content.rawM3u.split('\n').length} реда)
+                        </span>
+                        <button
+                          onClick={() => setRawM3uPreviewPost(post)}
+                          className="px-2.5 py-1 text-xs font-medium text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-md transition-colors flex items-center gap-1.5"
+                        >
+                          <Eye className="h-3.5 w-3.5 text-emerald-400" />
+                          <span>Преглед на плейлиста</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Additional Spec Attributes */}
+                    <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-slate-400">
+                      {post.content.channelsCount && (
+                        <span>Канали: <strong className="text-slate-200 font-mono">{post.content.channelsCount}</strong></span>
+                      )}
+                      {post.content.expiryDate && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>Валиден до: <strong className="text-emerald-400 font-mono">{post.content.expiryDate}</strong></span>
+                        </>
+                      )}
+                      {post.content.serverSpeed && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>Сървър: <strong className="text-slate-200">{post.content.serverSpeed}</strong></span>
+                        </>
+                      )}
+                      {post.content.regions && post.content.regions.length > 0 && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>Региони: <strong className="text-slate-200">{post.content.regions.join(', ')}</strong></span>
+                        </>
+                      )}
+                    </div>
+
+                    {post.content.notes && (
+                      <p className="text-[11px] text-slate-400 italic border-t border-slate-800/60 pt-2">
+                        Бележка: {post.content.notes}
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
 
               {/* Interactive Footer: Reactions & Comments */}
               <div className="mt-4 pt-3 border-t border-slate-800/60 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   {/* Reactions */}
                   <div className="flex items-center gap-2">
-                    {/* Primary Like button */}
+                    {/* Like button */}
                     <button
                       onClick={() => reactToPost(post.id, 'like')}
                       className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl transition-all shadow-sm ${
@@ -467,113 +724,113 @@ export const Feed: React.FC<FeedProps> = ({ onOpenEdit, filterUserOnly = false, 
                       </span>
                     </button>
 
-                    {/* Working Stream confirmation */}
-                    <button
-                      onClick={() => reactToPost(post.id, 'working')}
-                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl transition-colors border ${
-                        hasWorkingReaction
-                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 shadow-sm'
-                          : 'bg-slate-800/90 text-slate-300 hover:text-emerald-400 hover:bg-slate-800 border-slate-700/60'
-                      }`}
-                      title="Потвърди, че стриймът работи отлично"
-                    >
-                      <Flame className={`h-3.5 w-3.5 ${hasWorkingReaction ? 'fill-emerald-400 text-emerald-400' : 'text-emerald-400'}`} />
-                      <span>Работи</span>
-                      <span className="font-mono tabular-nums text-xs font-bold">
-                        {post.reactions.working.length}
-                      </span>
-                    </button>
+                    {/* Working Stream confirmation (for IPTV) */}
+                    {post.category !== 'thought' && (
+                      <button
+                        onClick={() => reactToPost(post.id, 'working')}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl transition-colors border ${
+                          hasWorkingReaction
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 shadow-sm'
+                            : 'bg-slate-800/90 text-slate-300 hover:text-emerald-400 hover:bg-slate-800 border-slate-700/60'
+                        }`}
+                        title="Потвърди, че стриймът работи отлично"
+                      >
+                        <ThumbsUp className={`h-3.5 w-3.5 ${hasWorkingReaction ? 'text-emerald-400 fill-emerald-500/30' : 'text-slate-400'}`} />
+                        <span>Работи</span>
+                        <span className="font-mono tabular-nums text-xs ml-0.5">{post.reactions.working.length}</span>
+                      </button>
+                    )}
 
-                    {/* Report Offline */}
-                    <button
-                      onClick={() => reactToPost(post.id, 'offline')}
-                      className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-xl transition-colors border ${
-                        hasOfflineReaction
-                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
-                          : 'bg-slate-800/90 text-slate-400 hover:text-amber-300 hover:bg-slate-800 border-slate-700/60'
-                      }`}
-                      title="Сигнализирай за проблем/офлайн"
-                    >
-                      <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
-                      {post.reactions.offline.length > 0 && (
-                        <span className="font-mono tabular-nums text-xs">
-                          {post.reactions.offline.length}
-                        </span>
-                      )}
-                    </button>
+                    {/* Offline report (for IPTV) */}
+                    {post.category !== 'thought' && (
+                      <button
+                        onClick={() => reactToPost(post.id, 'offline')}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl transition-colors border ${
+                          hasOfflineReaction
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 shadow-sm'
+                            : 'bg-slate-800/90 text-slate-300 hover:text-amber-400 hover:bg-slate-800 border-slate-700/60'
+                        }`}
+                        title="Сигнализирай за проблем или офлайн"
+                      >
+                        <AlertTriangle className={`h-3.5 w-3.5 ${hasOfflineReaction ? 'text-amber-400' : 'text-slate-400'}`} />
+                        <span>Офлайн</span>
+                        <span className="font-mono tabular-nums text-xs ml-0.5">{post.reactions.offline.length}</span>
+                      </button>
+                    )}
                   </div>
 
-                  {/* Comments toggle button */}
+                  {/* Comments counter button */}
                   <button
                     onClick={() => setActiveCommentPostId(activeCommentPostId === post.id ? null : post.id)}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl transition-colors border ${
-                      activeCommentPostId === post.id
-                        ? 'bg-teal-500/20 border-teal-500/50 text-teal-300'
-                        : 'bg-slate-800/90 border-slate-700/60 text-slate-300 hover:text-white hover:bg-slate-800'
-                    }`}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors border border-slate-700/60"
                   >
-                    <MessageSquare className="h-3.5 w-3.5 text-teal-400" />
+                    <MessageSquare className="h-3.5 w-3.5 text-emerald-400" />
                     <span>Коментари ({post.comments.length})</span>
                   </button>
                 </div>
 
-                {/* Expandable Comments Section */}
+                {/* Comments Section Drawer */}
                 {activeCommentPostId === post.id && (
-                  <div className="mt-3 pt-3 border-t border-slate-800/80 space-y-3.5">
-                    {/* Write a comment form */}
-                    <form onSubmit={e => handleCommentSubmit(e, post.id)} className="flex items-center gap-2">
-                      <img
-                        src={currentUser?.avatar}
-                        alt={currentUser?.username}
-                        className="h-8 w-8 rounded-xl object-cover border border-slate-700 shrink-0"
-                      />
-                      <input
-                        type="text"
-                        value={newCommentText}
-                        onChange={e => setNewCommentText(e.target.value)}
-                        placeholder={`Коментирайте като ${currentUser?.username}...`}
-                        className="flex-1 py-2 px-3 text-xs bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-teal-500 transition-colors"
-                      />
-                      <button
-                        type="submit"
-                        disabled={!newCommentText.trim()}
-                        className="px-4 py-2 text-xs font-semibold text-slate-950 bg-teal-400 hover:bg-teal-300 rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shrink-0"
-                      >
-                        Коментирай
-                      </button>
-                    </form>
-
-                    {/* Existing Comments List */}
+                  <div className="pt-3 border-t border-slate-800 space-y-3">
                     <div className="space-y-2">
                       {post.comments.length === 0 ? (
-                        <div className="p-4 text-center rounded-xl border border-dashed border-slate-800 bg-slate-950/40">
-                          <p className="text-xs text-slate-400 italic">Все още няма коментари под този стрийм. Бъдете първият!</p>
-                        </div>
+                        <p className="text-xs text-slate-500 italic py-2 text-center">
+                          Все още няма коментари. Напишете първия коментар!
+                        </p>
                       ) : (
                         post.comments.map(c => (
-                          <div key={c.id} className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/90 text-xs">
-                            <div className="flex items-center justify-between text-slate-400 mb-1">
-                              <button
-                                type="button"
-                                onClick={() => onSelectUser?.(c.userId)}
-                                className="font-semibold text-slate-200 hover:text-emerald-400 transition-colors flex items-center gap-2 text-left"
-                              >
-                                <img
-                                  src={c.userAvatar}
-                                  alt={c.username}
-                                  className="h-5 w-5 rounded-lg object-cover border border-slate-700"
-                                />
-                                <span>{c.username}</span>
-                              </button>
-                              <span className="text-[10px] text-slate-500 font-mono">
-                                {new Date(c.createdAt).toLocaleDateString('bg-BG')} {new Date(c.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </span>
+                          <div key={c.id} className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/80 flex items-start gap-2.5">
+                            <button
+                              type="button"
+                              onClick={() => onSelectUser?.(c.userId)}
+                              className="shrink-0 hover:opacity-85"
+                            >
+                              <img
+                                src={c.userAvatar}
+                                alt={c.username}
+                                referrerPolicy="no-referrer"
+                                className="h-7 w-7 rounded-lg object-cover border border-slate-700"
+                              />
+                            </button>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-2 mb-1">
+                                <button
+                                  type="button"
+                                  onClick={() => onSelectUser?.(c.userId)}
+                                  className="text-xs font-bold text-white hover:text-emerald-400 transition-colors"
+                                >
+                                  {c.username}
+                                </button>
+                                <span className="text-[10px] text-slate-500">
+                                  {new Date(c.createdAt).toLocaleDateString('bg-BG')}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">{c.content}</p>
                             </div>
-                            <p className="text-slate-200 ml-7 whitespace-pre-wrap break-words">{c.content}</p>
                           </div>
                         ))
                       )}
                     </div>
+
+                    {/* Add Comment Input */}
+                    {currentUser && (
+                      <form onSubmit={e => handleCommentSubmit(e, post.id)} className="flex items-center gap-2 pt-1">
+                        <input
+                          type="text"
+                          value={newCommentText}
+                          onChange={e => setNewCommentText(e.target.value)}
+                          placeholder="Напишете вашия коментар или отговор тук..."
+                          className="flex-1 py-1.5 px-3 text-xs bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!newCommentText.trim()}
+                          className="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-emerald-400 hover:bg-emerald-300 disabled:opacity-40 text-slate-950 transition-colors"
+                        >
+                          Изпрати
+                        </button>
+                      </form>
+                    )}
                   </div>
                 )}
               </div>
@@ -582,35 +839,40 @@ export const Feed: React.FC<FeedProps> = ({ onOpenEdit, filterUserOnly = false, 
         })}
       </div>
 
-      {/* Raw M3U Viewer Modal */}
+      {/* Raw M3U Preview Modal */}
       {rawM3uPreviewPost && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="relative w-full max-w-2xl rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="relative w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-slate-800 bg-slate-900 shadow-2xl overflow-hidden">
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between">
               <div>
-                <h3 className="text-base font-bold text-white">Преглед на M3U плейлист</h3>
-                <p className="text-xs text-slate-400">{rawM3uPreviewPost.title}</p>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Tv className="h-4 w-4 text-emerald-400" />
+                  <span>Преглед на плейлист: {rawM3uPreviewPost.title}</span>
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  {rawM3uPreviewPost.content.rawM3u?.split('\n').length} реда в плейлиста
+                </p>
               </div>
-              <button
-                onClick={() => setRawM3uPreviewPost(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white"
-              >
-                ✕
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => downloadM3uFile(rawM3uPreviewPost)}
+                  className="px-3 py-1.5 text-xs font-semibold text-emerald-300 bg-emerald-950 border border-emerald-800 rounded-lg hover:bg-emerald-900 transition-colors flex items-center gap-1.5"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span>Свали .m3u</span>
+                </button>
+                <button
+                  onClick={() => setRawM3uPreviewPost(null)}
+                  className="px-3 py-1.5 text-xs font-semibold text-slate-400 hover:text-white bg-slate-800 rounded-lg transition-colors"
+                >
+                  Затвори
+                </button>
+              </div>
             </div>
-
-            <pre className="max-h-96 overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono text-emerald-400 leading-relaxed whitespace-pre-wrap">
-              {rawM3uPreviewPost.content.rawM3u}
-            </pre>
-
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                onClick={() => downloadM3uFile(rawM3uPreviewPost)}
-                className="px-3.5 py-1.5 text-xs font-medium text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors flex items-center gap-1.5"
-              >
-                <Download className="h-3.5 w-3.5" />
-                <span>Свали като .m3u файл</span>
-              </button>
+            <div className="flex-1 p-4 overflow-y-auto bg-slate-950">
+              <pre className="font-mono text-xs text-slate-300 whitespace-pre-wrap select-all leading-relaxed">
+                {rawM3uPreviewPost.content.rawM3u}
+              </pre>
             </div>
           </div>
         </div>

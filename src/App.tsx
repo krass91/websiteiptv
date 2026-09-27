@@ -12,7 +12,8 @@ import { ArchitectureDocs } from './components/ArchitectureDocs';
 import { NotificationsView } from './components/NotificationsView';
 import { AdminPanel } from './components/AdminPanel';
 import { UserProfileModal } from './components/UserProfileModal';
-import { Post } from './types';
+import { UserSearchModal } from './components/UserSearchModal';
+import { Post, PostCategory } from './types';
 import { 
   ShieldCheck, 
   Lock, 
@@ -30,12 +31,15 @@ const MainLayout: React.FC = () => {
     isAuthenticated, 
     currentUser, 
     setActiveModal, 
-    setVerifyEmailTarget 
+    setVerifyEmailTarget,
+    isUserSearchOpen,
+    setIsUserSearchOpen,
   } = useAuth();
 
   const [activeTab, setActiveTab] = useState<string>('feed');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
   const [editingPost, setEditingPost] = useState<Post | null>(null);
+  const [createCategory, setCreateCategory] = useState<PostCategory>('thought');
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedUserTab, setSelectedUserTab] = useState<'wall' | 'messages'>('wall');
 
@@ -61,11 +65,13 @@ const MainLayout: React.FC = () => {
 
   const handleOpenEdit = (post: Post) => {
     setEditingPost(post);
+    setCreateCategory(post.category);
     setIsCreateModalOpen(true);
   };
 
-  const handleOpenCreate = () => {
+  const handleOpenCreate = (cat: PostCategory = 'thought') => {
     setEditingPost(null);
+    setCreateCategory(cat);
     setIsCreateModalOpen(true);
   };
 
@@ -75,7 +81,7 @@ const MainLayout: React.FC = () => {
       <Navbar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        openCreateModal={handleOpenCreate}
+        openCreateModal={() => handleOpenCreate('thought')}
       />
 
       {/* Main Content Area */}
@@ -101,21 +107,34 @@ const MainLayout: React.FC = () => {
                       </span>
                     </h1>
                     <p className="mt-1 text-xs text-slate-400">
-                      Частен достъп до проверени IPTV стриймове, M3U листи, Stalker портали и MAC ключове.
+                      Частен достъп до проверени IPTV стриймове, M3U листи, Stalker портали, MAC ключове и споделяне на мисли в реално време.
                     </p>
                   </div>
 
-                  <button
-                    onClick={handleOpenCreate}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 transition-colors shadow-sm self-start sm:self-auto"
-                  >
-                    <Plus className="h-4 w-4" />
-                    <span>Сподели нов стрийм / портал</span>
-                  </button>
+                  <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto">
+                    <button
+                      onClick={() => handleOpenCreate('thought')}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-white bg-purple-600 hover:bg-purple-500 transition-colors shadow-sm"
+                    >
+                      <Plus className="h-4 w-4" />
+                      <span>Сподели мисъл</span>
+                    </button>
+                    <button
+                      onClick={() => handleOpenCreate('m3u')}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 transition-colors shadow-sm"
+                    >
+                      <Plus className="h-4 w-4" />
+                      <span>Стрийм / Портал</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* The Secure Feed */}
-                <Feed onOpenEdit={handleOpenEdit} onSelectUser={handleOpenUserProfile} />
+                <Feed 
+                  onOpenEdit={handleOpenEdit} 
+                  onSelectUser={handleOpenUserProfile} 
+                  onOpenCreate={handleOpenCreate} 
+                />
               </div>
             )}
 
@@ -123,20 +142,25 @@ const MainLayout: React.FC = () => {
               <div className="space-y-6">
                 <div className="flex items-center justify-between p-5 rounded-2xl border border-slate-800 bg-slate-900/60">
                   <div>
-                    <h2 className="text-xl font-bold text-white">Моите споделени публикации</h2>
+                    <h2 className="text-xl font-bold text-white">Моите споделени публикации & мисли</h2>
                     <p className="mt-1 text-xs text-slate-400">
-                      Управление на вашите публични, приятелски и лични IPTV листи
+                      Управление на вашите публични, приятелски и лични IPTV листи и статуси
                     </p>
                   </div>
                   <button
-                    onClick={handleOpenCreate}
+                    onClick={() => handleOpenCreate('thought')}
                     className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-xl transition-colors"
                   >
                     <Plus className="h-4 w-4" />
-                    <span>Добави стрийм</span>
+                    <span>Нова публикация</span>
                   </button>
                 </div>
-                <Feed onOpenEdit={handleOpenEdit} filterUserOnly={true} onSelectUser={handleOpenUserProfile} />
+                <Feed 
+                  onOpenEdit={handleOpenEdit} 
+                  filterUserOnly={true} 
+                  onSelectUser={handleOpenUserProfile} 
+                  onOpenCreate={handleOpenCreate} 
+                />
               </div>
             )}
 
@@ -144,7 +168,13 @@ const MainLayout: React.FC = () => {
 
             {activeTab === 'admin-panel' && <AdminPanel />}
 
-            {activeTab === 'profile' && <ProfileView onOpenEdit={handleOpenEdit} />}
+            {(activeTab === 'profile' || activeTab === 'messages') && (
+              <ProfileView 
+                onOpenEdit={handleOpenEdit} 
+                onSelectUser={handleOpenUserProfile} 
+                initialTab={activeTab === 'messages' ? 'messages' : 'profile'}
+              />
+            )}
 
             {activeTab === 'm3u-tools' && <M3uTester />}
 
@@ -174,6 +204,13 @@ const MainLayout: React.FC = () => {
         />
       )}
 
+      {/* User Search & Database Modal */}
+      <UserSearchModal
+        isOpen={isUserSearchOpen}
+        onClose={() => setIsUserSearchOpen(false)}
+        onSelectUser={handleOpenUserProfile}
+      />
+
       {/* Floating Create / Edit Modal */}
       <CreateEditPostModal
         isOpen={isCreateModalOpen}
@@ -182,6 +219,7 @@ const MainLayout: React.FC = () => {
           setEditingPost(null);
         }}
         editingPost={editingPost}
+        initialCategory={createCategory}
       />
 
       {/* Auth Modals (Login, Register, Verify, Forgot Password, Simulated Mailbox) */}

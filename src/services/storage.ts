@@ -40,9 +40,32 @@ export const INITIAL_ADMIN_USER: User = {
   },
 };
 
+export const INITIAL_ADMIN_USER_ALT: User = {
+  id: 'user_admin_krasimirkiryakov927',
+  email: 'krasimirkiryakov927@gmail.com',
+  username: 'krasimir',
+  avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+  bio: 'Главен администратор на Dark IPTV (Cloud Admin).',
+  isVerified: true,
+  createdAt: new Date().toISOString(),
+  role: 'admin',
+  privacy: {
+    allowFriendRequests: true,
+    allowFollowers: true,
+    showEmail: false,
+  },
+  stats: {
+    postsCount: 0,
+    friendsCount: 0,
+    followersCount: 0,
+    followingCount: 0,
+  },
+};
+
 // Community members with public profiles to discover
 const SEED_USERS: User[] = [
   INITIAL_ADMIN_USER,
+  INITIAL_ADMIN_USER_ALT,
   {
     id: 'user_alex',
     email: 'alex@iptv-prive.net',
@@ -236,6 +259,21 @@ export class StorageEngine {
   static syncPosts(serverPosts: Post[]): void {
     if (!Array.isArray(serverPosts)) return;
     this.set(STORAGE_KEYS.POSTS, serverPosts);
+  }
+
+  static syncFriendRequests(serverReqs: FriendRequest[]): void {
+    if (!Array.isArray(serverReqs)) return;
+    this.set(STORAGE_KEYS.FRIEND_REQUESTS, serverReqs);
+  }
+
+  static syncDirectMessages(serverMsgs: DirectMessage[]): void {
+    if (!Array.isArray(serverMsgs)) return;
+    this.set(STORAGE_KEYS.MESSAGES, serverMsgs);
+  }
+
+  static syncNotifications(serverNotifs: NotificationItem[]): void {
+    if (!Array.isArray(serverNotifs)) return;
+    this.set(STORAGE_KEYS.NOTIFICATIONS, serverNotifs);
   }
 
   static getUserById(id: string): User | undefined {

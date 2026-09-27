@@ -17,7 +17,8 @@ import {
   Lock,
   Menu,
   X,
-  Sliders
+  Sliders,
+  MessageSquare
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -34,8 +35,11 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, openCre
     toggleTheme, 
     logout, 
     unreadNotifsCount, 
+    unreadMessagesCount,
     setActiveModal,
-    simulatedEmails
+    simulatedEmails,
+    allUsers,
+    setIsUserSearchOpen,
   } = useAuth();
 
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -72,14 +76,33 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, openCre
           <nav className="hidden md:flex items-center gap-1">
             <button
               onClick={() => setActiveTab('feed')}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
                 activeTab === 'feed'
-                  ? 'bg-slate-800/80 text-emerald-400'
+                  ? 'bg-slate-800/80 text-emerald-400 font-semibold'
                   : 'text-slate-300 hover:text-white hover:bg-slate-900/60'
               }`}
             >
-              Стриймове & Портали
+              <span>Фийд Стена</span>
             </button>
+
+            <button
+              onClick={() => setActiveTab('messages')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                activeTab === 'messages'
+                  ? 'bg-purple-950/80 text-purple-300 border border-purple-800/60 font-semibold'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-900/60'
+              }`}
+              title="Лични съобщения — вижте кой ви е писал"
+            >
+              <MessageSquare className="h-4 w-4 text-purple-400" />
+              <span>Съобщения</span>
+              {unreadMessagesCount > 0 ? (
+                <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-emerald-400 text-[10px] font-bold text-slate-950 px-1 animate-pulse font-mono">
+                  {unreadMessagesCount}
+                </span>
+              ) : null}
+            </button>
+
             <button
               onClick={() => setActiveTab('my-posts')}
               className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
@@ -145,6 +168,39 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, openCre
 
         {/* Zone 3: Actions & Profile */}
         <div className="flex items-center gap-2.5">
+          {/* Universal User Search in Full Database Button */}
+          <button
+            onClick={() => setIsUserSearchOpen(true)}
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-950/40 text-emerald-300 hover:bg-emerald-900/50 hover:text-white transition-colors text-xs font-semibold shadow-sm"
+            title="Търсене на регистрирани потребители в цялата база данни"
+          >
+            <Users className="h-4 w-4 text-emerald-400" />
+            <span className="hidden sm:inline">Търси потребители</span>
+            <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-mono border border-emerald-500/40">
+              {allUsers.length}
+            </span>
+          </button>
+
+          {/* Direct Messages Inbox Icon Trigger */}
+          {isAuthenticated && (
+            <button
+              onClick={() => setActiveTab('messages')}
+              title="Съобщения (Кой ми е писал)"
+              className={`relative flex h-9 w-9 items-center justify-center rounded-lg border transition-colors ${
+                activeTab === 'messages'
+                  ? 'border-purple-600 bg-purple-950 text-purple-200'
+                  : 'border-slate-800 bg-slate-900/80 text-slate-300 hover:border-slate-700 hover:text-white'
+              }`}
+            >
+              <MessageSquare className="h-4 w-4 text-purple-400" />
+              {unreadMessagesCount > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-400 text-[10px] font-bold text-slate-950 animate-pulse">
+                  {unreadMessagesCount}
+                </span>
+              )}
+            </button>
+          )}
+
           {/* Simulated Email Inbox Trigger */}
           <button
             onClick={() => setActiveModal('email-box')}
@@ -245,6 +301,24 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, openCre
                         <span>Контролен панел (Админ)</span>
                       </button>
                     )}
+
+                    <button
+                      onClick={() => {
+                        setActiveTab('messages');
+                        setShowUserMenu(false);
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-xs text-purple-300 hover:bg-purple-950/50 hover:text-white rounded-md transition-colors font-semibold"
+                    >
+                      <span className="flex items-center gap-2">
+                        <MessageSquare className="h-3.5 w-3.5 text-purple-400" />
+                        <span>Съобщения (Кой ми е писал)</span>
+                      </span>
+                      {unreadMessagesCount > 0 ? (
+                        <span className="px-1.5 py-0.2 rounded-full bg-emerald-400 text-slate-950 font-bold text-[10px]">
+                          {unreadMessagesCount} нови
+                        </span>
+                      ) : null}
+                    </button>
 
                     <button
                       onClick={() => {
@@ -353,9 +427,26 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, openCre
               setActiveTab('feed');
               setShowMobileMenu(false);
             }}
-            className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-slate-900 rounded-lg"
+            className="w-full text-left px-3 py-2 text-sm text-emerald-400 font-semibold hover:bg-slate-900 rounded-lg flex items-center gap-2"
           >
-            Стриймове & Портали
+            <span>Фийд Стена (Публикации & Стриймове)</span>
+          </button>
+          <button
+            onClick={() => {
+              setActiveTab('messages');
+              setShowMobileMenu(false);
+            }}
+            className="w-full text-left px-3 py-2 text-sm text-purple-300 font-semibold hover:bg-slate-900 rounded-lg flex items-center justify-between"
+          >
+            <span className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-purple-400" />
+              <span>Съобщения (Кой ми е писал)</span>
+            </span>
+            {unreadMessagesCount > 0 ? (
+              <span className="px-1.5 py-0.5 rounded-full bg-emerald-400 text-slate-950 font-bold text-xs">
+                {unreadMessagesCount} нови
+              </span>
+            ) : null}
           </button>
           <button
             onClick={() => {

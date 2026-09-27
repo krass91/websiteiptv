@@ -1,4 +1,4 @@
-export type PostCategory = 'm3u' | 'portal' | 'mac' | 'bundle';
+export type PostCategory = 'm3u' | 'portal' | 'mac' | 'bundle' | 'thought';
 export type PostVisibility = 'public' | 'friends' | 'private';
 
 export interface User {

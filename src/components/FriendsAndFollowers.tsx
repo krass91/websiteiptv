@@ -25,13 +25,15 @@ interface FriendsAndFollowersProps {
 export const FriendsAndFollowers: React.FC<FriendsAndFollowersProps> = ({ onSelectUser }) => {
   const { 
     currentUser, 
+    allUsers,
     pendingRequests, 
     sendFriendRequest, 
     respondFriendRequest, 
     removeFriend, 
     toggleFollow,
     isFriend,
-    isFollowing
+    isFollowing,
+    setIsUserSearchOpen,
   } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'friends' | 'requests' | 'following' | 'followers' | 'discover'>('friends');
@@ -40,12 +42,11 @@ export const FriendsAndFollowers: React.FC<FriendsAndFollowersProps> = ({ onSele
 
   if (!currentUser) return null;
 
-  const allUsers = StorageEngine.getUsers();
   const friends = StorageEngine.getFriendsOfUser(currentUser.id);
   const following = StorageEngine.getFollowingOfUser(currentUser.id);
   const followers = StorageEngine.getFollowersOfUser(currentUser.id);
 
-  // Users available to discover (excluding current user)
+  // Users available to discover (excluding current user) from live shared database
   const discoverUsers = allUsers.filter(u => u.id !== currentUser.id);
 
   const showFeedback = (text: string, error = false) => {

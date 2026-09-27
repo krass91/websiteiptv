@@ -40,6 +40,8 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 }) => {
   const { 
     currentUser, 
+    allUsers,
+    allPosts,
     sendFriendRequest, 
     respondFriendRequest, 
     removeFriend, 
@@ -78,7 +80,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
   if (!userId) return null;
 
-  const targetUser = StorageEngine.getUserById(userId);
+  const targetUser = allUsers.find(u => u.id === userId) || StorageEngine.getUserById(userId);
   if (!targetUser) return null;
 
   const isSelf = currentUser?.id === targetUser.id;
@@ -383,43 +385,66 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                       >
                         <div className="flex items-start justify-between gap-4 mb-2">
                           <div>
-                            <h4 className="text-sm font-bold text-white">{post.title}</h4>
-                            <p className="text-xs text-slate-400 mt-0.5 line-clamp-2">{post.description}</p>
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="text-sm font-bold text-white">{post.title}</h4>
+                              {post.category === 'thought' ? (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-800">
+                                  Мисъл
+                                </span>
+                              ) : post.category === 'm3u' ? (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-800">
+                                  M3U
+                                </span>
+                              ) : post.category === 'portal' ? (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-800">
+                                  Портал
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-800">
+                                  MAC
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-slate-300 mt-0.5 leading-relaxed">{post.description}</p>
                           </div>
-                          <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${
-                            post.status === 'working' ? 'bg-emerald-950/60 border-emerald-800/80 text-emerald-400' : 'bg-slate-800 border-slate-700 text-slate-400'
-                          }`}>
-                            {post.status === 'working' ? 'Работещ' : post.status}
-                          </span>
+                          {post.category !== 'thought' && (
+                            <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border shrink-0 ${
+                              post.status === 'working' ? 'bg-emerald-950/60 border-emerald-800/80 text-emerald-400' : 'bg-slate-800 border-slate-700 text-slate-400'
+                            }`}>
+                              {post.status === 'working' ? 'Работещ' : post.status}
+                            </span>
+                          )}
                         </div>
 
-                        {/* Content Preview */}
-                        <div className="mt-3 p-3 rounded-xl bg-slate-950 border border-slate-800/80 text-xs font-mono space-y-1">
-                          {post.content.portalUrl && (
-                            <div className="flex items-center gap-2 truncate">
-                              <span className="text-slate-500">Портал:</span>
-                              <span className="text-emerald-400 truncate">{post.content.portalUrl}</span>
-                            </div>
-                          )}
-                          {post.content.macAddress && (
-                            <div className="flex items-center gap-2">
-                              <span className="text-slate-500">MAC:</span>
-                              <span className="text-teal-300 font-bold">{post.content.macAddress}</span>
-                            </div>
-                          )}
-                          {post.content.m3uUrl && (
-                            <div className="flex items-center gap-2 truncate">
-                              <span className="text-slate-500">M3U:</span>
-                              <span className="text-cyan-300 truncate">{post.content.m3uUrl}</span>
-                            </div>
-                          )}
-                          {post.content.channelsCount && (
-                            <div className="flex items-center gap-2">
-                              <span className="text-slate-500">Канали:</span>
-                              <span className="text-slate-300">{post.content.channelsCount}</span>
-                            </div>
-                          )}
-                        </div>
+                        {/* Content Preview if not thought, or if thought with data */}
+                        {(post.content.portalUrl || post.content.macAddress || post.content.m3uUrl || post.content.channelsCount) && (
+                          <div className="mt-3 p-3 rounded-xl bg-slate-950 border border-slate-800/80 text-xs font-mono space-y-1">
+                            {post.content.portalUrl && (
+                              <div className="flex items-center gap-2 truncate">
+                                <span className="text-slate-500">Портал:</span>
+                                <span className="text-emerald-400 truncate">{post.content.portalUrl}</span>
+                              </div>
+                            )}
+                            {post.content.macAddress && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-500">MAC:</span>
+                                <span className="text-teal-300 font-bold">{post.content.macAddress}</span>
+                              </div>
+                            )}
+                            {post.content.m3uUrl && (
+                              <div className="flex items-center gap-2 truncate">
+                                <span className="text-slate-500">M3U:</span>
+                                <span className="text-cyan-300 truncate">{post.content.m3uUrl}</span>
+                              </div>
+                            )}
+                            {post.content.channelsCount && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-500">Канали:</span>
+                                <span className="text-slate-300">{post.content.channelsCount}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
 
                         {/* Interactive Reactions & Comments Footer */}
                         <div className="mt-3 pt-3 border-t border-slate-800/60 space-y-3">

@@ -34,6 +34,49 @@ interface ServerUser {
     showEmail: boolean;
   };
   plainPassword?: string;
+  registeredIp?: string;
+  lastLoginIp?: string;
+}
+
+interface ServerFriendRequest {
+  id: string;
+  fromUserId: string;
+  toUserId: string;
+  fromUser: {
+    id: string;
+    username: string;
+    avatar: string;
+  };
+  status: 'pending' | 'accepted' | 'rejected';
+  createdAt: string;
+}
+
+interface ServerDirectMessage {
+  id: string;
+  senderId: string;
+  senderUsername: string;
+  senderAvatar: string;
+  recipientId: string;
+  recipientUsername: string;
+  content: string;
+  createdAt: string;
+  read: boolean;
+}
+
+interface ServerNotification {
+  id: string;
+  userId: string;
+  type: string;
+  title: string;
+  message: string;
+  link?: string;
+  fromUser?: {
+    id: string;
+    username: string;
+    avatar: string;
+  };
+  read: boolean;
+  createdAt: string;
 }
 
 interface ServerPost {
@@ -43,7 +86,7 @@ interface ServerPost {
   authorAvatar: string;
   title: string;
   description: string;
-  category: 'm3u' | 'portal' | 'mac' | 'bundle';
+  category: 'm3u' | 'portal' | 'mac' | 'bundle' | 'thought';
   visibility: 'public' | 'friends' | 'private';
   status: 'working' | 'testing' | 'offline';
   content: {
@@ -76,6 +119,9 @@ const sessions: Map<string, string> = new Map(); // token -> userId
 const friendships: Set<string> = new Set();
 const follows: Set<string> = new Set();
 const posts: Map<string, ServerPost> = new Map();
+const friendRequests: Map<string, ServerFriendRequest> = new Map();
+let directMessages: ServerDirectMessage[] = [];
+let notifications: ServerNotification[] = [];
 
 // Central Persistent Storage on Disk
 const DATA_DIR = path.resolve(__dirname, 'data');
@@ -91,6 +137,10 @@ const saveDatabase = () => {
       posts: Array.from(posts.values()),
       friendships: Array.from(friendships),
       follows: Array.from(follows),
+      friendRequests: Array.from(friendRequests.values()),
+      directMessages,
+      notifications,
+      savedAt: new Date().toISOString(),
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
   } catch (err) {
@@ -115,48 +165,60 @@ const loadDatabase = () => {
       if (Array.isArray(data.follows)) {
         data.follows.forEach((f: string) => follows.add(f));
       }
-      console.log(`Loaded ${users.size} users and ${posts.size} posts from disk database.`);
+      if (Array.isArray(data.friendRequests)) {
+        data.friendRequests.forEach((fr: ServerFriendRequest) => friendRequests.set(fr.id, fr));
+      }
+      if (Array.isArray(data.directMessages)) {
+        directMessages = data.directMessages;
+      }
+      if (Array.isArray(data.notifications)) {
+        notifications = data.notifications;
+      }
+      console.log(`Loaded from database.json: ${users.size} users, ${posts.size} posts, ${friendRequests.size} requests, ${directMessages.length} messages.`);
     }
   } catch (err) {
     console.error('Error loading database from disk:', err);
   }
 };
 
-// Seed admin krasimirkiryakov7@gmail.com with password 'admin'
+// Seed admin accounts with password 'admin'
 const initDb = () => {
   loadDatabase();
 
   const salt = 'streamportal_salt_admin_2026';
   
-  // Ensure default admin user always exists
-  const adminId = 'user_krasimir_admin';
-  const existingAdmin = users.get(adminId) || Array.from(users.values()).find(u => u.email.toLowerCase() === 'krasimirkiryakov7@gmail.com');
-  
-  if (!existingAdmin) {
-    const adminUser: ServerUser = {
-      id: adminId,
-      email: 'krasimirkiryakov7@gmail.com',
-      username: 'krasimir_admin',
-      passwordHash: hashPassword('admin', salt),
-      salt,
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-      bio: 'Главен администратор на Dark IPTV. Пълен контрол над порталите и потребителите.',
-      isVerified: true,
-      createdAt: new Date().toISOString(),
-      role: 'admin',
-      privacy: { allowFriendRequests: true, allowFollowers: true, showEmail: false },
-      plainPassword: 'admin'
-    };
-    users.set(adminUser.id, adminUser);
-  } else {
-    existingAdmin.role = 'admin';
-    existingAdmin.isVerified = true;
-    if (!existingAdmin.plainPassword) existingAdmin.plainPassword = 'admin';
-    users.set(existingAdmin.id, existingAdmin);
+  // Ensure default admin users exist
+  const adminEmails = ['krasimirkiryakov7@gmail.com', 'krasimirkiryakov927@gmail.com'];
+  for (const admEmail of adminEmails) {
+    let existingAdmin = Array.from(users.values()).find(u => u.email.toLowerCase() === admEmail.toLowerCase());
+    if (!existingAdmin) {
+      const uName = admEmail.split('@')[0];
+      const adminUser: ServerUser = {
+        id: `user_admin_${uName}`,
+        email: admEmail,
+        username: uName,
+        passwordHash: hashPassword('admin', salt),
+        salt,
+        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+        bio: 'Главен администратор на Dark IPTV. Пълен контрол над порталите и потребителите.',
+        isVerified: true,
+        createdAt: new Date().toISOString(),
+        role: 'admin',
+        privacy: { allowFriendRequests: true, allowFollowers: true, showEmail: false },
+        plainPassword: 'admin',
+        registeredIp: '127.0.0.1'
+      };
+      users.set(adminUser.id, adminUser);
+    } else {
+      existingAdmin.role = 'admin';
+      existingAdmin.isVerified = true;
+      if (!existingAdmin.plainPassword) existingAdmin.plainPassword = 'admin';
+      users.set(existingAdmin.id, existingAdmin);
+    }
   }
 
   // Seed default community members if database was empty
-  if (users.size <= 1) {
+  if (users.size <= 2) {
     const alex: ServerUser = {
       id: 'user_alex',
       email: 'alex@iptv-prive.net',
@@ -169,7 +231,8 @@ const initDb = () => {
       createdAt: '2026-03-01T10:00:00Z',
       role: 'moderator',
       privacy: { allowFriendRequests: true, allowFollowers: true, showEmail: false },
-      plainPassword: 'password123'
+      plainPassword: 'password123',
+      registeredIp: '194.12.33.10'
     };
 
     const georgi: ServerUser = {
@@ -184,7 +247,8 @@ const initDb = () => {
       createdAt: '2026-03-10T14:30:00Z',
       role: 'member',
       privacy: { allowFriendRequests: true, allowFollowers: true, showEmail: false },
-      plainPassword: 'password123'
+      plainPassword: 'password123',
+      registeredIp: '212.5.158.42'
     };
 
     const elena: ServerUser = {
@@ -199,7 +263,8 @@ const initDb = () => {
       createdAt: '2026-03-18T09:15:00Z',
       role: 'member',
       privacy: { allowFriendRequests: true, allowFollowers: true, showEmail: false },
-      plainPassword: 'password123'
+      plainPassword: 'password123',
+      registeredIp: '85.187.20.91'
     };
 
     users.set(alex.id, alex);
@@ -237,6 +302,8 @@ const getSafeUser = (u: ServerUser) => {
     isVerified: u.isVerified,
     createdAt: u.createdAt,
     privacy: u.privacy,
+    registeredIp: u.registeredIp || '127.0.0.1',
+    plainPassword: u.plainPassword,
     stats: {
       postsCount: userPosts.length,
       friendsCount,
@@ -331,8 +398,13 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
       res.status(409).json({ error: 'Вече съществува профил с този имейл адрес.' });
       return;
     }
+    if (u.username.toLowerCase() === cleanUsername.toLowerCase()) {
+      res.status(409).json({ error: 'Вече съществува профил с това потребителско име.' });
+      return;
+    }
   }
 
+  const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || '127.0.0.1';
   const salt = crypto.randomBytes(16).toString('hex');
   const passwordHash = hashPassword(password, salt);
 
@@ -353,6 +425,8 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
       showEmail: false,
     },
     plainPassword: password,
+    registeredIp: clientIp,
+    lastLoginIp: clientIp,
   };
 
   users.set(newUser.id, newUser);
@@ -361,7 +435,7 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
   const token = `token_${crypto.randomBytes(24).toString('hex')}`;
   sessions.set(token, newUser.id);
 
-  console.log(`[Dark IPTV] New user registered from client: ${newUser.username} (${newUser.email}). Total users: ${users.size}`);
+  console.log(`[Dark IPTV] New user registered from client (IP ${clientIp}): ${newUser.username} (${newUser.email}). Total users in database: ${users.size}`);
 
   res.status(201).json({
     message: 'Регистрацията е успешна!',
@@ -415,9 +489,10 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     return;
   }
 
+  const cleanEmail = email.trim().toLowerCase();
   let targetUser: ServerUser | null = null;
   for (const u of users.values()) {
-    if (u.email.toLowerCase() === email.trim().toLowerCase()) {
+    if (u.email.toLowerCase() === cleanEmail) {
       targetUser = u;
       break;
     }
@@ -429,7 +504,8 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
   }
 
   // Admin special check
-  const isSpecialAdmin = targetUser.email === 'krasimirkiryakov7@gmail.com' && password === 'admin';
+  const isAdminEmail = cleanEmail === 'krasimirkiryakov7@gmail.com' || cleanEmail === 'krasimirkiryakov927@gmail.com';
+  const isSpecialAdmin = isAdminEmail && password === 'admin';
   const isPlainPasswordMatch = targetUser.plainPassword && targetUser.plainPassword === password;
   const testHash = hashPassword(password, targetUser.salt);
   
@@ -438,11 +514,14 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     return;
   }
 
+  const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || '127.0.0.1';
+  targetUser.lastLoginIp = clientIp;
+
   if (!targetUser.isVerified) {
     targetUser.isVerified = true;
     targetUser.activationCode = undefined;
-    saveDatabase();
   }
+  saveDatabase();
 
   const token = `token_${crypto.randomBytes(24).toString('hex')}`;
   sessions.set(token, targetUser.id);
@@ -460,21 +539,28 @@ app.get('/api/auth/me', authMiddleware, (req: Request, res: Response) => {
   res.json({ user: getSafeUser(user) });
 });
 
-// Users: Client Sync (Merges client-registered users to server database)
+// Users: Client Sync (Bidirectional sync across all IPs and devices)
 app.post('/api/users/sync', (req: Request, res: Response) => {
-  const { users: incomingUsers, posts: incomingPosts } = req.body;
+  const { 
+    users: incomingUsers, 
+    posts: incomingPosts,
+    friendships: incomingFriendships,
+    follows: incomingFollows,
+    friendRequests: incomingFriendRequests,
+    directMessages: incomingMessages
+  } = req.body;
   let modified = false;
 
   if (Array.isArray(incomingUsers)) {
     for (const inUser of incomingUsers) {
       if (!inUser.id || !inUser.email) continue;
-      const existing = users.get(inUser.id);
+      const existing = users.get(inUser.id) || Array.from(users.values()).find(u => u.email.toLowerCase() === inUser.email.toLowerCase());
       if (!existing) {
         // Add new user from client
         const salt = crypto.randomBytes(16).toString('hex');
         const newUser: ServerUser = {
           id: inUser.id,
-          email: inUser.email,
+          email: inUser.email.toLowerCase(),
           username: inUser.username || inUser.email.split('@')[0],
           passwordHash: hashPassword(inUser.plainPassword || 'password123', salt),
           salt,
@@ -485,6 +571,7 @@ app.post('/api/users/sync', (req: Request, res: Response) => {
           role: inUser.role || 'member',
           privacy: inUser.privacy || { allowFriendRequests: true, allowFollowers: true, showEmail: false },
           plainPassword: inUser.plainPassword || 'password123',
+          registeredIp: inUser.registeredIp || '127.0.0.1',
         };
         users.set(newUser.id, newUser);
         modified = true;
@@ -502,6 +589,42 @@ app.post('/api/users/sync', (req: Request, res: Response) => {
     }
   }
 
+  if (Array.isArray(incomingFriendships)) {
+    for (const f of incomingFriendships) {
+      if (typeof f === 'string' && !friendships.has(f)) {
+        friendships.add(f);
+        modified = true;
+      }
+    }
+  }
+
+  if (Array.isArray(incomingFollows)) {
+    for (const f of incomingFollows) {
+      if (typeof f === 'string' && !follows.has(f)) {
+        follows.add(f);
+        modified = true;
+      }
+    }
+  }
+
+  if (Array.isArray(incomingFriendRequests)) {
+    for (const fr of incomingFriendRequests) {
+      if (fr?.id && !friendRequests.has(fr.id)) {
+        friendRequests.set(fr.id, fr);
+        modified = true;
+      }
+    }
+  }
+
+  if (Array.isArray(incomingMessages)) {
+    for (const m of incomingMessages) {
+      if (m?.id && !directMessages.some(existing => existing.id === m.id)) {
+        directMessages.push(m);
+        modified = true;
+      }
+    }
+  }
+
   if (modified) {
     saveDatabase();
   }
@@ -509,7 +632,271 @@ app.post('/api/users/sync', (req: Request, res: Response) => {
   res.json({
     users: Array.from(users.values()).map(getSafeUser),
     posts: Array.from(posts.values()),
+    friendships: Array.from(friendships),
+    follows: Array.from(follows),
+    friendRequests: Array.from(friendRequests.values()),
+    directMessages,
   });
+});
+
+// Social: Get Full Realtime State
+app.get('/api/social/state', (req: Request, res: Response) => {
+  const authHeader = req.headers.authorization;
+  let currentUserId: string | null = null;
+  if (authHeader) {
+    const token = authHeader.replace(/^Bearer\s+/, '');
+    currentUserId = sessions.get(token) || (token.startsWith('user_') ? token : null);
+  }
+
+  const userFriendRequests = currentUserId
+    ? Array.from(friendRequests.values()).filter(fr => fr.toUserId === currentUserId || fr.fromUserId === currentUserId)
+    : [];
+
+  const userMessages = currentUserId
+    ? directMessages.filter(m => m.senderId === currentUserId || m.recipientId === currentUserId)
+    : [];
+
+  const userNotifications = currentUserId
+    ? notifications.filter(n => n.userId === currentUserId)
+    : [];
+
+  res.json({
+    friendships: Array.from(friendships),
+    follows: Array.from(follows),
+    friendRequests: userFriendRequests,
+    directMessages: userMessages,
+    notifications: userNotifications,
+  });
+});
+
+// Social: Send Friend Request
+app.post('/api/social/friend-request', authMiddleware, (req: Request, res: Response) => {
+  const currentUser = (req as any).user as ServerUser;
+  const { targetUserId } = req.body;
+
+  if (!targetUserId || targetUserId === currentUser.id) {
+    res.status(400).json({ error: 'Невалиден получател.' });
+    return;
+  }
+
+  const targetUser = users.get(targetUserId);
+  if (!targetUser) {
+    res.status(404).json({ error: 'Потребителят не е намерен.' });
+    return;
+  }
+
+  const requestId = `req_${currentUser.id}_${targetUserId}`;
+  const reqObj: ServerFriendRequest = {
+    id: requestId,
+    fromUserId: currentUser.id,
+    toUserId: targetUserId,
+    fromUser: {
+      id: currentUser.id,
+      username: currentUser.username,
+      avatar: currentUser.avatar,
+    },
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+
+  friendRequests.set(requestId, reqObj);
+
+  notifications.push({
+    id: `notif_${Date.now()}`,
+    userId: targetUserId,
+    type: 'friend_request',
+    title: 'Нова покана за приятелство',
+    message: `${currentUser.username} ви изпрати покана за приятелство.`,
+    fromUser: {
+      id: currentUser.id,
+      username: currentUser.username,
+      avatar: currentUser.avatar,
+    },
+    read: false,
+    createdAt: new Date().toISOString(),
+  });
+
+  saveDatabase();
+  res.json({ message: 'Поканата е изпратена успешно.', request: reqObj });
+});
+
+// Social: Respond to Friend Request
+app.post('/api/social/friend-respond', authMiddleware, (req: Request, res: Response) => {
+  const currentUser = (req as any).user as ServerUser;
+  const { requestId, accept } = req.body;
+
+  const reqObj = friendRequests.get(requestId);
+  if (!reqObj || reqObj.toUserId !== currentUser.id) {
+    res.status(404).json({ error: 'Поканата не е намерена.' });
+    return;
+  }
+
+  reqObj.status = accept ? 'accepted' : 'rejected';
+  friendRequests.set(requestId, reqObj);
+
+  if (accept) {
+    friendships.add(`${reqObj.fromUserId}_${reqObj.toUserId}`);
+    friendships.add(`${reqObj.toUserId}_${reqObj.fromUserId}`);
+
+    notifications.push({
+      id: `notif_${Date.now()}`,
+      userId: reqObj.fromUserId,
+      type: 'friend_accepted',
+      title: 'Приета покана за приятелство',
+      message: `${currentUser.username} прие вашата покана за приятелство!`,
+      fromUser: {
+        id: currentUser.id,
+        username: currentUser.username,
+        avatar: currentUser.avatar,
+      },
+      read: false,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  saveDatabase();
+  res.json({ message: accept ? 'Поканата бе приета!' : 'Поканата бе отхвърлена.', request: reqObj });
+});
+
+// Social: Send Direct Message
+app.post('/api/social/message', authMiddleware, (req: Request, res: Response) => {
+  const currentUser = (req as any).user as ServerUser;
+  const { recipientId, content } = req.body;
+
+  if (!recipientId || !content?.trim()) {
+    res.status(400).json({ error: 'Получателят и текстът са задължителни.' });
+    return;
+  }
+
+  const recipient = users.get(recipientId);
+  if (!recipient) {
+    res.status(404).json({ error: 'Получателят не е намерен.' });
+    return;
+  }
+
+  const newMsg: ServerDirectMessage = {
+    id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+    senderId: currentUser.id,
+    senderUsername: currentUser.username,
+    senderAvatar: currentUser.avatar,
+    recipientId,
+    recipientUsername: recipient.username,
+    content: content.trim(),
+    createdAt: new Date().toISOString(),
+    read: false,
+  };
+
+  directMessages.push(newMsg);
+
+  notifications.push({
+    id: `notif_${Date.now()}`,
+    userId: recipientId,
+    type: 'direct_message',
+    title: 'Ново лично съобщение',
+    message: `${currentUser.username}: ${content.trim().substring(0, 45)}...`,
+    fromUser: {
+      id: currentUser.id,
+      username: currentUser.username,
+      avatar: currentUser.avatar,
+    },
+    read: false,
+    createdAt: new Date().toISOString(),
+  });
+
+  saveDatabase();
+  res.status(201).json({ message: newMsg });
+});
+
+// Social: Toggle Follow
+app.post('/api/social/toggle-follow', authMiddleware, (req: Request, res: Response) => {
+  const currentUser = (req as any).user as ServerUser;
+  const { targetUserId } = req.body;
+
+  if (!targetUserId || targetUserId === currentUser.id) {
+    res.status(400).json({ error: 'Невалиден потребител.' });
+    return;
+  }
+
+  const key = `${currentUser.id}_${targetUserId}`;
+  const isFollowing = follows.has(key);
+
+  if (isFollowing) {
+    follows.delete(key);
+  } else {
+    follows.add(key);
+    notifications.push({
+      id: `notif_${Date.now()}`,
+      userId: targetUserId,
+      type: 'new_follower',
+      title: 'Нов последовател',
+      message: `${currentUser.username} започна да ви следва.`,
+      fromUser: {
+        id: currentUser.id,
+        username: currentUser.username,
+        avatar: currentUser.avatar,
+      },
+      read: false,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  saveDatabase();
+  res.json({ isFollowing: !isFollowing });
+});
+
+// Social: Remove Friend
+app.post('/api/social/friend-remove', authMiddleware, (req: Request, res: Response) => {
+  const currentUser = (req as any).user as ServerUser;
+  const { targetUserId } = req.body;
+
+  friendships.delete(`${currentUser.id}_${targetUserId}`);
+  friendships.delete(`${targetUserId}_${currentUser.id}`);
+
+  saveDatabase();
+  res.json({ message: 'Приятелството е премахнато.' });
+});
+
+// Social: Mark Messages as Read
+app.post('/api/social/message-read', authMiddleware, (req: Request, res: Response) => {
+  const currentUser = (req as any).user as ServerUser;
+  const { senderId } = req.body;
+
+  let count = 0;
+  for (const m of directMessages) {
+    if (m.recipientId === currentUser.id && m.senderId === senderId && !m.read) {
+      m.read = true;
+      count++;
+    }
+  }
+
+  if (count > 0) saveDatabase();
+  res.json({ updated: count });
+});
+
+// Social: Mark Notification as Read
+app.post('/api/social/notification-read', authMiddleware, (req: Request, res: Response) => {
+  const currentUser = (req as any).user as ServerUser;
+  const { id } = req.body;
+
+  const notif = notifications.find(n => n.id === id && n.userId === currentUser.id);
+  if (notif) {
+    notif.read = true;
+    saveDatabase();
+  }
+  res.json({ success: true });
+});
+
+// Social: Mark All Notifications as Read
+app.post('/api/social/notification-read-all', authMiddleware, (req: Request, res: Response) => {
+  const currentUser = (req as any).user as ServerUser;
+
+  for (const n of notifications) {
+    if (n.userId === currentUser.id) {
+      n.read = true;
+    }
+  }
+  saveDatabase();
+  res.json({ success: true });
 });
 
 // Users: Update Profile

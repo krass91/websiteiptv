@@ -30,7 +30,16 @@ import {
 } from 'lucide-react';
 
 export const AdminPanel: React.FC = () => {
-  const { currentUser, deletePost, adminDeleteUser, adminVerifyUser, adminResetPassword, refreshData } = useAuth();
+  const { 
+    currentUser, 
+    allUsers, 
+    allPosts, 
+    deletePost, 
+    adminDeleteUser, 
+    adminVerifyUser, 
+    adminResetPassword, 
+    refreshData 
+  } = useAuth();
   const [editingPost, setEditingPost] = useState<Post | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'posts' | 'users' | 'system'>('posts');
@@ -53,9 +62,6 @@ export const AdminPanel: React.FC = () => {
       </div>
     );
   }
-
-  const allPosts = StorageEngine.getPosts();
-  const allUsers = StorageEngine.getUsers();
 
   const filteredPosts = allPosts.filter(p => 
     p.title.toLowerCase().includes(searchPost.toLowerCase()) ||
@@ -400,7 +406,7 @@ export const AdminPanel: React.FC = () => {
                       <p className="text-xs font-mono text-slate-400 mt-0.5 truncate">{user.email}</p>
                       <p className="text-xs text-slate-300 mt-1 line-clamp-1">{user.bio || 'Няма въведено био'}</p>
 
-                      <div className="mt-2.5 flex items-center gap-3 text-[11px] text-slate-400 pt-2 border-t border-slate-800/60">
+                      <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-[11px] text-slate-400 pt-2 border-t border-slate-800/60">
                         <span className="flex items-center gap-1 text-slate-300">
                           <FileText className="h-3 w-3 text-slate-500" />
                           <span>{userPostsCount} публикации</span>
@@ -409,6 +415,11 @@ export const AdminPanel: React.FC = () => {
                         <span className="flex items-center gap-1">
                           <Calendar className="h-3 w-3 text-slate-500" />
                           <span>Член от {new Date(user.createdAt).toLocaleDateString('bg-BG')}</span>
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <span className="flex items-center gap-1 font-mono text-emerald-400 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 text-[10px]" title="IP адрес на регистрация / последен вход">
+                          <Globe className="h-2.5 w-2.5 text-emerald-500" />
+                          <span>IP: {(user as any).registeredIp || (user as any).lastLoginIp || '127.0.0.1'}</span>
                         </span>
                       </div>
                     </div>

@@ -6,6 +6,11 @@ interface AuthContextType {
   currentUser: User | null;
   isAuthenticated: boolean;
   theme: 'dark' | 'light';
+  allUsers: User[];
+  allPosts: Post[];
+  isUserSearchOpen: boolean;
+  setIsUserSearchOpen: (open: boolean) => void;
+  searchUsers: (query: string) => Promise<User[]>;
   notifications: NotificationItem[];
   unreadNotifsCount: number;
   pendingRequests: FriendRequest[];
@@ -69,6 +74,9 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [allUsers, setAllUsers] = useState<User[]>(() => StorageEngine.getUsers());
+  const [allPosts, setAllPosts] = useState<Post[]>(() => StorageEngine.getPosts());
+  const [isUserSearchOpen, setIsUserSearchOpen] = useState<boolean>(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [pendingRequests, setPendingRequests] = useState<FriendRequest[]>([]);
   const [simulatedEmails, setSimulatedEmails] = useState<SimulatedEmail[]>([]);
@@ -77,37 +85,88 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [tick, setTick] = useState<number>(0);
 
   const refreshData = () => {
+    setAllUsers(StorageEngine.getUsers());
+    setAllPosts(StorageEngine.getPosts());
     setTick(t => t + 1);
   };
 
   const syncWithServer = async () => {
     try {
       const token = localStorage.getItem('iptv_auth_token');
-      // 1. Fetch all users from server
-      const usersRes = await fetch('/api/users');
-      if (usersRes.ok) {
-        const data = await usersRes.json();
-        if (Array.isArray(data.users)) {
-          StorageEngine.syncUsers(data.users);
-        }
-      }
-
-      // 2. Fetch posts from server
       const headers: Record<string, string> = {};
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       }
+
+      // 1. Fetch all users from server database across all IPs
+      const usersRes = await fetch('/api/users');
+      if (usersRes.ok) {
+        const data = await usersRes.json();
+        if (Array.isArray(data.users) && data.users.length > 0) {
+          StorageEngine.syncUsers(data.users);
+          setAllUsers(data.users);
+        }
+      }
+
+      // 2. Fetch posts from server
       const postsRes = await fetch('/api/posts', { headers });
       if (postsRes.ok) {
         const pData = await postsRes.json();
         if (Array.isArray(pData.posts)) {
           StorageEngine.syncPosts(pData.posts);
+          setAllPosts(pData.posts);
         }
       }
+
+      // 3. Fetch real-time social state
+      const socialRes = await fetch('/api/social/state', { headers });
+      if (socialRes.ok) {
+        const sData = await socialRes.json();
+        if (Array.isArray(sData.friendRequests)) {
+          StorageEngine.syncFriendRequests(sData.friendRequests);
+          if (currentUser) {
+            setPendingRequests(sData.friendRequests.filter((r: FriendRequest) => r.toUserId === currentUser.id && r.status === 'pending'));
+          }
+        }
+        if (Array.isArray(sData.notifications)) {
+          StorageEngine.syncNotifications(sData.notifications);
+          if (currentUser) {
+            setNotifications(sData.notifications);
+          }
+        }
+        if (Array.isArray(sData.directMessages)) {
+          StorageEngine.syncDirectMessages(sData.directMessages);
+        }
+      }
+
       setTick(t => t + 1);
     } catch {
       // Offline fallback
     }
+  };
+
+  // Search users across the entire server database
+  const searchUsers = async (query: string): Promise<User[]> => {
+    const q = query.trim().toLowerCase();
+    try {
+      const res = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.users)) {
+          return data.users;
+        }
+      }
+    } catch {
+      // fallback
+    }
+    const currentList = StorageEngine.getUsers();
+    if (!q) return currentList;
+    return currentList.filter(u => 
+      u.username.toLowerCase().includes(q) ||
+      u.email.toLowerCase().includes(q) ||
+      (u.bio || '').toLowerCase().includes(q) ||
+      u.role.toLowerCase().includes(q)
+    );
   };
 
   // Initialize storage on mount and sync with server
@@ -121,26 +180,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setTheme(savedTheme);
     document.documentElement.classList.toggle('dark', savedTheme === 'dark');
 
-    // Initial server sync & backup local users to server
+    // Initial server sync & backup local users to server database
     const localUsers = StorageEngine.getUsers();
     const localPosts = StorageEngine.getPosts();
+    const localFriendships = StorageEngine.getFriendships().map(([a, b]) => `${a}_${b}`);
+    const localFollows = StorageEngine.getFollows().map(f => `${f.followerId}_${f.followingId}`);
+    const localFriendRequests = StorageEngine.getFriendRequests();
+    const localMessages = StorageEngine.getMessages();
+
     fetch('/api/users/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ users: localUsers, posts: localPosts })
+      body: JSON.stringify({ 
+        users: localUsers, 
+        posts: localPosts,
+        friendships: localFriendships,
+        follows: localFollows,
+        friendRequests: localFriendRequests,
+        directMessages: localMessages,
+      })
     })
       .then(res => res.json())
       .then(data => {
-        if (Array.isArray(data.users)) StorageEngine.syncUsers(data.users);
-        if (Array.isArray(data.posts)) StorageEngine.syncPosts(data.posts);
+        if (Array.isArray(data.users)) {
+          StorageEngine.syncUsers(data.users);
+          setAllUsers(data.users);
+        }
+        if (Array.isArray(data.posts)) {
+          StorageEngine.syncPosts(data.posts);
+          setAllPosts(data.posts);
+        }
         setTick(t => t + 1);
       })
       .catch(() => {});
 
-    // Polling interval so registrations from other IPs show up immediately (every 3.5s)
+    // Polling interval so registrations from other IPs show up immediately (every 2.5s)
     const interval = setInterval(() => {
       syncWithServer();
-    }, 3500);
+    }, 2500);
 
     const onFocus = () => syncWithServer();
     window.addEventListener('focus', onFocus);
@@ -478,6 +555,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     StorageEngine.saveFriendRequest(req);
 
+    // Call server to persist in real database
+    fetch('/api/social/friend-request', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || currentUser.id}`,
+      },
+      body: JSON.stringify({ targetUserId }),
+    }).catch(() => {});
+
     // Notify target user
     StorageEngine.addNotification({
       userId: targetUserId,
@@ -505,6 +592,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     req.status = accept ? 'accepted' : 'rejected';
     StorageEngine.saveFriendRequest(req);
 
+    fetch('/api/social/friend-respond', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || currentUser.id}`,
+      },
+      body: JSON.stringify({ requestId, accept }),
+    }).catch(() => {});
+
     if (accept) {
       StorageEngine.addFriendship(req.fromUserId, req.toUserId);
       // Notify sender
@@ -528,6 +624,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const removeFriend = (targetUserId: string) => {
     if (!currentUser) return;
     StorageEngine.removeFriendship(currentUser.id, targetUserId);
+    fetch('/api/social/friend-remove', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || currentUser.id}`,
+      },
+      body: JSON.stringify({ targetUserId }),
+    }).catch(() => {});
     refreshData();
   };
 
@@ -541,6 +645,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     const isNowFollowing = StorageEngine.toggleFollow(currentUser.id, targetUserId);
+
+    fetch('/api/social/toggle-follow', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || currentUser.id}`,
+      },
+      body: JSON.stringify({ targetUserId }),
+    }).catch(() => {});
 
     if (isNowFollowing) {
       StorageEngine.addNotification({
@@ -579,6 +692,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!recipient) return { success: false, message: 'Потребителят не съществува' };
 
     StorageEngine.sendDirectMessage(currentUser, recipient, content);
+
+    fetch('/api/social/message', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || currentUser.id}`,
+      },
+      body: JSON.stringify({ recipientId: recipientUserId, content }),
+    }).catch(() => {});
+
     refreshData();
     return { success: true };
   };
@@ -591,6 +714,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const markConversationAsRead = (otherUserId: string) => {
     if (!currentUser) return;
     StorageEngine.markConversationAsRead(currentUser.id, otherUserId);
+    fetch('/api/social/message-read', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || currentUser.id}`,
+      },
+      body: JSON.stringify({ senderId: otherUserId }),
+    }).catch(() => {});
     refreshData();
   };
 
@@ -749,6 +880,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     StorageEngine.deleteUser(userId);
+
+    fetch(`/api/admin/users/${userId}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || 'token_admin'}`,
+      },
+    }).catch(() => {});
+
     refreshData();
     return { success: true, message: `Потребителят ${target.username} бе успешно премахнат от системата.` };
   };
@@ -764,6 +903,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     target.isVerified = true;
     target.activationCode = undefined;
     StorageEngine.saveUser(target);
+
+    fetch(`/api/admin/users/${userId}/verify`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || 'token_admin'}`,
+      },
+    }).catch(() => {});
 
     // Notify user
     StorageEngine.addNotification({
@@ -843,6 +989,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         currentUser,
         isAuthenticated: !!currentUser,
         theme,
+        allUsers,
+        allPosts,
+        isUserSearchOpen,
+        setIsUserSearchOpen,
+        searchUsers,
         notifications,
         unreadNotifsCount,
         pendingRequests,

@@ -28,17 +28,36 @@ export const UserSearchModal: React.FC<UserSearchModalProps> = ({
   onClose,
   onSelectUser,
 }) => {
-  const { currentUser, isFriend, sendFriendRequest, setActiveModal } = useAuth();
+  const { currentUser, isFriend, sendFriendRequest, setActiveModal, allUsers, searchUsers } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'moderator' | 'member'>('all');
   const [actionFeedback, setActionFeedback] = useState<{ userId: string; message: string } | null>(null);
+  const [liveSearchResults, setLiveSearchResults] = useState<User[] | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
 
-  // All users from StorageEngine (synced with central server across all IPs)
-  const allUsers = StorageEngine.getUsers();
+  // Live server-grounded search effect with debounce
+  React.useEffect(() => {
+    if (!searchTerm.trim()) {
+      setLiveSearchResults(null);
+      setIsSearching(false);
+      return;
+    }
+    setIsSearching(true);
+    const timer = setTimeout(() => {
+      searchUsers(searchTerm).then(results => {
+        setLiveSearchResults(results);
+        setIsSearching(false);
+      });
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm, searchUsers]);
+
+  const activePool = liveSearchResults !== null ? liveSearchResults : allUsers;
 
   const filteredUsers = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
-    return allUsers.filter(user => {
+    return activePool.filter(user => {
       // Role filter
       if (roleFilter !== 'all' && user.role !== roleFilter) {
         return false;
@@ -52,7 +71,7 @@ export const UserSearchModal: React.FC<UserSearchModalProps> = ({
 
       return matchUsername || matchBio || matchRole || matchEmail;
     });
-  }, [allUsers, searchTerm, roleFilter, currentUser?.role]);
+  }, [activePool, searchTerm, roleFilter, currentUser?.role]);
 
   if (!isOpen) return null;
 
