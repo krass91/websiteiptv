@@ -91,11 +91,13 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const hasIncomingPending = currentUser ? StorageEngine.getPendingFriendRequestsForUser(currentUser.id).find(r => r.fromUserId === targetUser.id) : null;
 
   // Posts visible according to privacy:
-  // If targetUser posts are queried, filter through StorageEngine.getAuthorizedPosts
-  // And filter only those by targetUser!
-  const userPosts = StorageEngine.getAuthorizedPosts(currentUser).filter(p => p.userId === targetUser.id);
-  const allUserPostsCount = StorageEngine.getPosts().filter(p => p.userId === targetUser.id).length;
-  const hiddenPostsCount = allUserPostsCount - userPosts.length;
+  const userPosts = StorageEngine.getAuthorizedPosts(currentUser).filter(
+    p => p.userId === targetUser.id || (p.authorName && targetUser.username && p.authorName.toLowerCase() === targetUser.username.toLowerCase())
+  );
+  const allUserPostsCount = StorageEngine.getPosts().filter(
+    p => p.userId === targetUser.id || (p.authorName && targetUser.username && p.authorName.toLowerCase() === targetUser.username.toLowerCase())
+  ).length;
+  const hiddenPostsCount = Math.max(0, allUserPostsCount - userPosts.length);
 
   const friendsCount = StorageEngine.getFriendsOfUser(targetUser.id).length;
   const followersCount = StorageEngine.getFollowersOfUser(targetUser.id).length;

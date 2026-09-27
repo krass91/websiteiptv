@@ -1220,43 +1220,74 @@ app.put('/api/users/:id', authMiddleware, (req: Request, res: Response) => {
   res.json({ user: result.user, message: 'Профилът е обновен успешно.' });
 });
 
-// Posts: Strict Access Control Protected Route
-app.get('/api/posts', authMiddleware, (req: Request, res: Response) => {
-  const currentUser = (req as any).user as ServerUser;
+// Posts: Feed and Wall Route (Allows public preview for guests, strict access for authenticated users)
+app.get('/api/posts', (req: Request, res: Response) => {
+  // Resolve optional user identity without rejecting guests with 401
+  const authHeader = req.headers.authorization;
+  const xUserId = (req.headers['x-user-id'] as string)?.trim();
+  let currentUserId: string | null = null;
+
+  if (authHeader) {
+    const token = authHeader.replace(/^Bearer\s+/, '').trim();
+    currentUserId = sessions.get(token) || (token.startsWith('user_') ? token : null);
+    if (!currentUserId && token) {
+      const match = Array.from(users.values()).find(u => u.id === token || u.email.toLowerCase() === token.toLowerCase());
+      if (match) currentUserId = match.id;
+    }
+  }
+  if (!currentUserId && xUserId) {
+    if (users.has(xUserId)) {
+      currentUserId = xUserId;
+    } else {
+      const match = Array.from(users.values()).find(
+        u => u.id === xUserId || u.email.toLowerCase() === xUserId.toLowerCase() || u.username.toLowerCase() === xUserId.toLowerCase()
+      );
+      if (match) currentUserId = match.id;
+    }
+  }
+
+  const currentUser = currentUserId ? users.get(currentUserId) : null;
   const { category, search } = req.query;
 
   const accessiblePosts: ServerPost[] = [];
 
   for (const p of posts.values()) {
-    // Admin has universal override
-    if (currentUser.role === 'admin') {
-      accessiblePosts.push(p);
-      continue;
-    }
+    if (currentUser) {
+      // Admin has universal override to moderate all
+      if (currentUser.role === 'admin') {
+        accessiblePosts.push(p);
+        continue;
+      }
 
-    // 1. Author can always see their own
-    if (p.userId === currentUser.id) {
-      accessiblePosts.push(p);
-      continue;
-    }
+      // 1. Author can always see their own
+      if (p.userId === currentUser.id || (p.authorName && p.authorName.toLowerCase() === currentUser.username.toLowerCase())) {
+        accessiblePosts.push(p);
+        continue;
+      }
 
-    // 2. Private: ONLY author or admin
-    if (p.visibility === 'private') {
-      continue;
-    }
+      // 2. Private: ONLY author or admin
+      if (p.visibility === 'private') {
+        continue;
+      }
 
-    // 3. Friends only: author and mutual friends
-    if (p.visibility === 'friends') {
-      const isFriend = friendships.has(`${currentUser.id}_${p.userId}`) || friendships.has(`${p.userId}_${currentUser.id}`);
-      if (isFriend) {
+      // 3. Friends only: author and mutual friends
+      if (p.visibility === 'friends') {
+        const isFriend = friendships.has(`${currentUser.id}_${p.userId}`) || friendships.has(`${p.userId}_${currentUser.id}`);
+        if (isFriend) {
+          accessiblePosts.push(p);
+        }
+        continue;
+      }
+
+      // 4. Public: visible to all authenticated
+      if (p.visibility === 'public') {
         accessiblePosts.push(p);
       }
-      continue;
-    }
-
-    // 4. Public: visible to all authenticated
-    if (p.visibility === 'public') {
-      accessiblePosts.push(p);
+    } else {
+      // Guest / unauthenticated visitor: see all public posts
+      if (p.visibility === 'public') {
+        accessiblePosts.push(p);
+      }
     }
   }
 
@@ -1266,32 +1297,42 @@ app.get('/api/posts', authMiddleware, (req: Request, res: Response) => {
   }
   if (search && typeof search === 'string') {
     const q = search.toLowerCase();
-    filtered = filtered.filter(p => p.title.toLowerCase().includes(q) || p.description.toLowerCase().includes(q));
+    filtered = filtered.filter(p => p.title.toLowerCase().includes(q) || p.description.toLowerCase().includes(q) || (p.authorName && p.authorName.toLowerCase().includes(q)));
   }
+
+  // Sort newest first
+  filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   res.json({ posts: filtered });
 });
 
-// Post: Create
+// Post: Create (Ensures publications, portals, and lists persist to server database)
 app.post('/api/posts', authMiddleware, (req: Request, res: Response) => {
   const currentUser = (req as any).user as ServerUser;
-  const { title, description, category, visibility, content } = req.body;
+  const { id, title, description, category, visibility, content, status } = req.body;
 
-  if (!title || !category || !visibility) {
-    res.status(400).json({ error: 'Заглавието, категорията и видимостта са задължителни.' });
+  if (!title || !title.trim()) {
+    res.status(400).json({ error: 'Заглавието на публикацията е задължително.' });
     return;
   }
 
+  const postId = (id && typeof id === 'string' && id.trim()) 
+    ? id.trim() 
+    : `post_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+  const cleanCategory = (category && typeof category === 'string' && category.trim()) ? category.trim() : 'thought';
+  const cleanVisibility = (visibility && typeof visibility === 'string' && visibility.trim()) ? visibility.trim() : 'public';
+
   const newPost: ServerPost = {
-    id: `post_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+    id: postId,
     userId: currentUser.id,
     authorName: currentUser.username,
     authorAvatar: currentUser.avatar,
-    title,
-    description: description || '',
-    category,
-    visibility,
-    status: 'working',
+    title: title.trim(),
+    description: (description !== undefined && typeof description === 'string') ? description.trim() : '',
+    category: cleanCategory as any,
+    visibility: cleanVisibility as any,
+    status: (status === 'testing' || status === 'offline') ? status : 'working',
     content: content || {},
     reactions: { working: [currentUser.id], like: [], offline: [] },
     comments: [],
@@ -1302,7 +1343,9 @@ app.post('/api/posts', authMiddleware, (req: Request, res: Response) => {
   posts.set(newPost.id, newPost);
   saveDatabase();
 
-  res.status(201).json({ post: newPost });
+  console.log(`[Dark IPTV] New post created by ${currentUser.username} (${currentUser.id}): [${newPost.category}] "${newPost.title}". Total posts: ${posts.size}`);
+
+  res.status(201).json({ post: newPost, success: true });
 });
 
 // Post: Admin & Author Edit

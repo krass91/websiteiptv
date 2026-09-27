@@ -91,15 +91,18 @@ export const CreateEditPostModal: React.FC<CreateEditPostModalProps> = ({
     e.preventDefault();
     setError('');
 
-    if (!title.trim()) {
-      setError(category === 'thought' ? 'Моля въведете заглавие или тема на мисълта.' : 'Заглавието е задължително.');
+    const cleanTitle = title.trim();
+    if (!cleanTitle) {
+      setError('Моля въведете заглавие на публикацията.');
       return;
     }
 
-    if (category === 'thought' && !description.trim()) {
-      setError('Моля споделете какво мислите в полето за съдържание.');
-      return;
-    }
+    const cleanDesc = description.trim() || (
+      category === 'portal' && portalUrl.trim() ? `IPTV Портал: ${portalUrl.trim()}` :
+      category === 'm3u' && m3uUrl.trim() ? `IPTV M3U стрийм листа` :
+      category === 'mac' && macAddress.trim() ? `MAG / Stalker MAC: ${macAddress.trim()}` :
+      cleanTitle
+    );
 
     const regions = regionsStr
       .split(',')
@@ -120,16 +123,16 @@ export const CreateEditPostModal: React.FC<CreateEditPostModalProps> = ({
 
     if (editingPost) {
       updatePost(editingPost.id, {
-        title,
-        description,
+        title: cleanTitle,
+        description: cleanDesc,
         category,
         visibility,
         content: contentData,
       });
     } else {
       createPost({
-        title,
-        description,
+        title: cleanTitle,
+        description: cleanDesc,
         category,
         visibility,
         content: contentData,

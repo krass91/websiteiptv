@@ -291,7 +291,33 @@ export class StorageEngine {
 
   static syncPosts(serverPosts: Post[]): void {
     if (!Array.isArray(serverPosts)) return;
-    this.set(STORAGE_KEYS.POSTS, serverPosts);
+    const local = this.getPosts();
+    const map = new Map<string, Post>();
+
+    // 1. First seed with local posts so freshly created local posts are NEVER wiped out
+    local.forEach(p => {
+      if (p?.id) map.set(p.id, p);
+    });
+
+    // 2. Merge server posts, keeping the freshest data
+    serverPosts.forEach(sPost => {
+      if (!sPost?.id) return;
+      if (map.has(sPost.id)) {
+        const existing = map.get(sPost.id)!;
+        const sTime = new Date(sPost.updatedAt || sPost.createdAt).getTime();
+        const eTime = new Date(existing.updatedAt || existing.createdAt).getTime();
+        if (sTime >= eTime) {
+          map.set(sPost.id, { ...existing, ...sPost });
+        }
+      } else {
+        map.set(sPost.id, sPost);
+      }
+    });
+
+    const merged = Array.from(map.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+    this.set(STORAGE_KEYS.POSTS, merged);
   }
 
   static syncFriendRequests(serverReqs: FriendRequest[]): void {
@@ -773,12 +799,12 @@ export class StorageEngine {
 
   // Filtering Posts by Visibility: STRICT ACCESS CONTROL
   static getAuthorizedPosts(currentUser: User | null): Post[] {
-    // If not authenticated, posts are locked/hidden
-    if (!currentUser) {
-      return [];
-    }
-
     const allPosts = this.getPosts();
+
+    // If not authenticated, public posts are visible for discovery
+    if (!currentUser) {
+      return allPosts.filter(post => post.visibility === 'public');
+    }
 
     return allPosts.filter(post => {
       // Admin has universal override access to moderate & edit all posts
@@ -787,7 +813,7 @@ export class StorageEngine {
       }
 
       // 1. Author always has access to their own posts
-      if (post.userId === currentUser.id) {
+      if (post.userId === currentUser.id || (post.authorName && post.authorName.toLowerCase() === currentUser.username.toLowerCase())) {
         return true;
       }
 

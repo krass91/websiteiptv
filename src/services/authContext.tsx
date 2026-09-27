@@ -116,13 +116,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
-      // 2. Fetch posts from server
+      // 2. Fetch posts from server and safely merge
       const postsRes = await fetch('/api/posts', { headers });
       if (postsRes.ok) {
         const pData = await postsRes.json();
         if (Array.isArray(pData.posts)) {
           StorageEngine.syncPosts(pData.posts);
-          setAllPosts(pData.posts);
+          setAllPosts(StorageEngine.getPosts());
         }
       }
 
@@ -910,7 +910,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshData();
   };
 
-  // Post Actions
+  // Post Actions (Instant local UI + permanent server database persistence)
   const createPost = (data: {
     title: string;
     description: string;
@@ -920,17 +920,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }): Post => {
     if (!currentUser) throw new Error('Необходимо е влизане в профила');
 
+    const postId = `post_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
     const newPost: Post = {
-      id: `post_${Date.now()}`,
+      id: postId,
       userId: currentUser.id,
       authorName: currentUser.username,
       authorAvatar: currentUser.avatar,
-      title: data.title,
-      description: data.description,
-      category: data.category,
-      visibility: data.visibility,
+      title: data.title.trim(),
+      description: data.description || '',
+      category: data.category || 'thought',
+      visibility: data.visibility || 'public',
       status: 'working',
-      content: data.content,
+      content: data.content || {},
       reactions: {
         working: [currentUser.id],
         like: [],
@@ -941,8 +943,42 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       updatedAt: new Date().toISOString(),
     };
 
+    // 1. Instantly save in local storage & React state
     StorageEngine.savePost(newPost);
+    setAllPosts(prev => [newPost, ...prev.filter(p => p.id !== newPost.id)]);
     refreshData();
+
+    // 2. Persist to server database via API
+    const token = localStorage.getItem('iptv_auth_token') || currentUser.id;
+    fetch('/api/posts', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'x-user-id': currentUser.id,
+      },
+      body: JSON.stringify({
+        id: newPost.id,
+        title: newPost.title,
+        description: newPost.description,
+        category: newPost.category,
+        visibility: newPost.visibility,
+        content: newPost.content,
+        status: newPost.status,
+      }),
+    })
+      .then(res => res.json())
+      .then(result => {
+        if (result?.post) {
+          StorageEngine.savePost(result.post);
+          setAllPosts(prev => [result.post, ...prev.filter(p => p.id !== result.post.id)]);
+          refreshData();
+        }
+      })
+      .catch(err => {
+        console.warn('Network issue saving post to server, stored locally:', err);
+      });
+
     return newPost;
   };
 
@@ -960,7 +996,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       updatedAt: new Date().toISOString(),
     };
     StorageEngine.savePost(updated);
+    setAllPosts(prev => prev.map(p => (p.id === id ? updated : p)));
     refreshData();
+
+    const token = localStorage.getItem('iptv_auth_token') || currentUser.id;
+    fetch(`/api/posts/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'x-user-id': currentUser.id,
+      },
+      body: JSON.stringify(data),
+    }).catch(() => {});
   };
 
   const deletePost = (id: string) => {
@@ -972,7 +1020,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (currentUser.role !== 'admin' && existing.userId !== currentUser.id) return;
 
     StorageEngine.deletePost(id);
+    setAllPosts(prev => prev.filter(p => p.id !== id));
     refreshData();
+
+    const token = localStorage.getItem('iptv_auth_token') || currentUser.id;
+    fetch(`/api/posts/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'x-user-id': currentUser.id,
+      },
+    }).catch(() => {});
   };
 
   const reactToPost = (postId: string, type: 'working' | 'like' | 'offline') => {
@@ -1011,7 +1069,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     StorageEngine.savePost(post);
+    setAllPosts(prev => prev.map(p => (p.id === postId ? post : p)));
     refreshData();
+
+    const token = localStorage.getItem('iptv_auth_token') || currentUser.id;
+    fetch(`/api/posts/${postId}/react`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'x-user-id': currentUser.id,
+      },
+      body: JSON.stringify({ type }),
+    }).catch(() => {});
   };
 
   const addComment = (postId: string, content: string) => {
@@ -1032,6 +1102,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     post.comments.push(newComment);
     StorageEngine.savePost(post);
+    setAllPosts(prev => prev.map(p => (p.id === postId ? post : p)));
 
     if (post.userId !== currentUser.id) {
       StorageEngine.addNotification({
@@ -1049,6 +1120,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     refreshData();
+
+    const token = localStorage.getItem('iptv_auth_token') || currentUser.id;
+    fetch(`/api/posts/${postId}/comment`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'x-user-id': currentUser.id,
+      },
+      body: JSON.stringify({ text: content.trim() }),
+    }).catch(() => {});
   };
 
   const adminDeleteUser = (userId: string): { success: boolean; message?: string } => {

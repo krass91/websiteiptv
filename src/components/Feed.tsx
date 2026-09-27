@@ -66,9 +66,9 @@ export const Feed: React.FC<FeedProps> = ({
 
   // Strict visibility enforcement via reactive allPosts from server database
   const accessiblePosts = allPosts.filter(post => {
-    if (!currentUser) return false;
+    if (!currentUser) return post.visibility === 'public';
     if (currentUser.role === 'admin') return true;
-    if (post.userId === currentUser.id) return true;
+    if (post.userId === currentUser.id || (post.authorName && currentUser.username && post.authorName.toLowerCase() === currentUser.username.toLowerCase())) return true;
     if (post.visibility === 'private') return false;
     if (post.visibility === 'friends') return StorageEngine.areFriends(currentUser.id, post.userId);
     if (post.visibility === 'public') return true;
