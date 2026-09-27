@@ -24,7 +24,9 @@ import {
   CheckCircle2,
   Clock,
   ArrowRight,
-  UserPlus
+  UserPlus,
+  KeyRound,
+  AlertCircle
 } from 'lucide-react';
 
 interface ProfileViewProps {
@@ -64,6 +66,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     allPosts, 
     directMessages,
     updateProfile, 
+    changePassword,
     sendDirectMessage, 
     markConversationAsRead, 
     setIsUserSearchOpen 
@@ -88,6 +91,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastLoadedUserIdRef = useRef<string | null>(null);
+
+  // Password Change state
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   // Sync profile form state only when switching users or on initial mount, not on every background poll
   useEffect(() => {
@@ -250,6 +261,44 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
   };
 
+  const handleChangePassword = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setPasswordError(null);
+    setPasswordSuccess(null);
+
+    const trimmedNew = newPassword.trim();
+    if (!trimmedNew || trimmedNew.length < 4) {
+      setPasswordError('Новата парола трябва да е с дължина минимум 4 символа.');
+      return false;
+    }
+
+    if (trimmedNew !== confirmPassword.trim()) {
+      setPasswordError('Двете въведени нови пароли не съвпадат!');
+      return false;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      const res = await changePassword(trimmedNew, currentPassword.trim());
+      if (res.success) {
+        setPasswordSuccess(res.message || 'Паролата за Вашия профил беше обновена успешно!');
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        setTimeout(() => setPasswordSuccess(null), 4000);
+        return true;
+      } else {
+        setPasswordError(res.message || 'Грешка при смяна на паролата.');
+        return false;
+      }
+    } catch {
+      setPasswordError('Възникна системна грешка при смяната на паролата.');
+      return false;
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
@@ -261,10 +310,22 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       return;
     }
 
+    // If new password was entered, validate it before submitting profile
+    if (newPassword.trim()) {
+      if (newPassword.trim().length < 4) {
+        setErrorMessage('Новата парола трябва да е минимум 4 символа.');
+        return;
+      }
+      if (newPassword.trim() !== confirmPassword.trim()) {
+        setErrorMessage('Въведената нова парола и потвърждението не съвпадат.');
+        return;
+      }
+    }
+
     setIsSubmitting(true);
 
     try {
-      const res = await updateProfile({
+      const payload: any = {
         username: username.trim(),
         bio: bio.trim(),
         avatar: avatar.trim(),
@@ -273,11 +334,22 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           allowFollowers,
           showEmail,
         },
-      });
+      };
+
+      if (newPassword.trim()) {
+        payload.password = newPassword.trim();
+      }
+
+      const res = await updateProfile(payload);
 
       if (res.success) {
         setSavedSuccess(true);
-        setTimeout(() => setSavedSuccess(false), 3000);
+        if (newPassword.trim()) {
+          setNewPassword('');
+          setConfirmPassword('');
+          setCurrentPassword('');
+        }
+        setTimeout(() => setSavedSuccess(false), 3500);
       } else if (res.message) {
         setErrorMessage(res.message);
       }
@@ -975,12 +1047,83 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               </div>
             </div>
 
+            {/* Password Change Section (In-place update, never creates a new account) */}
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-850">
+                <div className="flex items-center gap-2">
+                  <KeyRound className="h-4 w-4 text-amber-400" />
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                    Смяна на парола (Защита на акаунта)
+                  </h3>
+                </div>
+                <span className="text-[11px] text-slate-400">
+                  Запазва същия профил и данни
+                </span>
+              </div>
+
+              {passwordSuccess && (
+                <div className="p-2.5 rounded-xl bg-emerald-950/70 border border-emerald-800 text-emerald-300 text-xs flex items-center gap-2">
+                  <Check className="h-4 w-4 text-emerald-400 shrink-0" />
+                  <span>{passwordSuccess}</span>
+                </div>
+              )}
+
+              {passwordError && (
+                <div className="p-2.5 rounded-xl bg-rose-950/70 border border-rose-800 text-rose-300 text-xs flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
+                  <span>{passwordError}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Нова парола (минимум 4 символа)
+                  </label>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    placeholder="Въведете нова парола..."
+                    autoComplete="new-password"
+                    className="w-full py-2 px-3 text-xs sm:text-sm bg-slate-900 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Потвърди новата парола
+                  </label>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={e => setConfirmPassword(e.target.value)}
+                    placeholder="Повторете новата парола..."
+                    autoComplete="new-password"
+                    className="w-full py-2 px-3 text-xs sm:text-sm bg-slate-900 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleChangePassword}
+                  disabled={isChangingPassword || !newPassword.trim()}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
+                >
+                  <KeyRound className="h-3.5 w-3.5" />
+                  <span>{isChangingPassword ? 'Запазване...' : 'Смени само паролата'}</span>
+                </button>
+              </div>
+            </div>
+
             <div className="flex justify-end pt-2">
               <button
                 type="submit"
                 className="px-5 py-2.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-xl transition-colors shadow-sm"
               >
-                Запази настройките и профилната снимка
+                Запази настройките, снимката и паролата
               </button>
             </div>
           </form>

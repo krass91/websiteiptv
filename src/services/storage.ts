@@ -43,7 +43,7 @@ export const INITIAL_ADMIN_USER: User = {
 export const INITIAL_ADMIN_USER_ALT: User = {
   id: 'user_admin_krasimirkiryakov927',
   email: 'krasimirkiryakov927@gmail.com',
-  username: 'krasimir',
+  username: 'krasimir_cloud',
   avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
   bio: 'Главен администратор на Dark IPTV (Cloud Admin).',
   isVerified: true,
@@ -173,7 +173,9 @@ export class StorageEngine {
       } else {
         users[adminIdx].role = 'admin';
         users[adminIdx].isVerified = true;
-        localStorage.setItem(`iptv_pwd_${users[adminIdx].id}`, 'admin');
+        if (!localStorage.getItem(`iptv_pwd_${users[adminIdx].id}`)) {
+          localStorage.setItem(`iptv_pwd_${users[adminIdx].id}`, 'admin');
+        }
         modified = true;
       }
 
@@ -361,6 +363,11 @@ export class StorageEngine {
 
   static getUserByEmail(email: string): User | undefined {
     return this.getUsers().find(u => u.email.toLowerCase() === email.toLowerCase());
+  }
+
+  static getUserByEmailOrUsername(identifier: string): User | undefined {
+    const clean = identifier.trim().toLowerCase();
+    return this.getUsers().find(u => u.email.toLowerCase() === clean || u.username.toLowerCase() === clean);
   }
 
   static saveUser(user: User): void {

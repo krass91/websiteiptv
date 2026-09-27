@@ -214,7 +214,7 @@ const initDb = () => {
   // Ensure default admin users exist
   const adminConfigs = [
     { email: 'krasimirkiryakov7@gmail.com', preferredId: 'user_krasimir_admin', defaultUsername: 'krasimir_admin' },
-    { email: 'krasimirkiryakov927@gmail.com', preferredId: 'user_admin_krasimirkiryakov927', defaultUsername: 'krasimir' },
+    { email: 'krasimirkiryakov927@gmail.com', preferredId: 'user_admin_krasimirkiryakov927', defaultUsername: 'krasimir_cloud' },
     { email: 'mrkrasimirkiryakov@gmail.com', preferredId: 'user_admin_mrkrasimir', defaultUsername: 'krasimir_k' }
   ];
 
@@ -542,37 +542,37 @@ app.post('/api/auth/verify', (req: Request, res: Response) => {
   });
 });
 
-// Auth: Login
+// Auth: Login (allows email OR username)
 app.post('/api/auth/login', (req: Request, res: Response) => {
-  const { email, password } = req.body;
+  const { email, username, identifier, password } = req.body;
+  const loginId = (email || username || identifier || '').trim().toLowerCase();
 
-  if (!email || !password) {
-    res.status(400).json({ error: 'Имейлът и паролата са задължителни.' });
+  if (!loginId || !password) {
+    res.status(400).json({ error: 'Имейлът/потребителското име и паролата са задължителни.' });
     return;
   }
 
-  const cleanEmail = email.trim().toLowerCase();
   let targetUser: ServerUser | null = null;
   for (const u of users.values()) {
-    if (u.email.toLowerCase() === cleanEmail) {
+    if (u.email.toLowerCase() === loginId || u.username.toLowerCase() === loginId) {
       targetUser = u;
       break;
     }
   }
 
   if (!targetUser) {
-    res.status(401).json({ error: 'Невалиден имейл или парола.' });
+    res.status(401).json({ error: 'Невалиден имейл/потребителско име или парола.' });
     return;
   }
 
   // Admin special check
-  const isAdminEmail = cleanEmail === 'krasimirkiryakov7@gmail.com' || cleanEmail === 'krasimirkiryakov927@gmail.com';
+  const isAdminEmail = targetUser.email.toLowerCase().includes('krasimirkiryakov');
   const isSpecialAdmin = isAdminEmail && password === 'admin';
   const isPlainPasswordMatch = targetUser.plainPassword && targetUser.plainPassword === password;
   const testHash = hashPassword(password, targetUser.salt);
   
   if (!isSpecialAdmin && !isPlainPasswordMatch && testHash !== targetUser.passwordHash) {
-    res.status(401).json({ error: 'Невалиден имейл или парола.' });
+    res.status(401).json({ error: 'Невалиден имейл/потребителско име или парола.' });
     return;
   }
 
@@ -599,6 +599,36 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
 app.get('/api/auth/me', authMiddleware, (req: Request, res: Response) => {
   const user = (req as any).user as ServerUser;
   res.json({ user: getSafeUser(user) });
+});
+
+// Auth: Change Password for Current Account (preserves identity, never creates new account)
+app.post('/api/auth/change-password', authMiddleware, (req: Request, res: Response) => {
+  const currentUser = (req as any).user as ServerUser;
+  const { newPassword, currentPassword } = req.body;
+
+  if (!newPassword || typeof newPassword !== 'string' || newPassword.trim().length < 4) {
+    res.status(400).json({ error: 'Новата парола трябва да съдържа минимум 4 символа.' });
+    return;
+  }
+
+  // If currentPassword is provided and not admin, check it
+  if (currentPassword && currentUser.role !== 'admin') {
+    const testHash = hashPassword(currentPassword, currentUser.salt);
+    const isPlainMatch = currentUser.plainPassword && currentUser.plainPassword === currentPassword;
+    if (testHash !== currentUser.passwordHash && !isPlainMatch) {
+      res.status(400).json({ error: 'Въведената текуща парола е грешна.' });
+      return;
+    }
+  }
+
+  const salt = crypto.randomBytes(16).toString('hex');
+  currentUser.salt = salt;
+  currentUser.passwordHash = hashPassword(newPassword.trim(), salt);
+  currentUser.plainPassword = newPassword.trim();
+  users.set(currentUser.id, currentUser);
+  saveDatabase();
+
+  res.json({ success: true, message: 'Паролата за вашия акаунт беше успешно сменена!' });
 });
 
 // Users: Client Sync (Bidirectional sync across all IPs and devices)
@@ -1060,18 +1090,27 @@ app.post('/api/social/notification-read-all', authMiddleware, (req: Request, res
 
 // Helper to update a user's profile and cascade changes across posts, comments, messages
 const performUserProfileUpdate = (target: ServerUser, body: any): { success: boolean; error?: string; user?: any } => {
-  const { username, bio, avatar, privacy } = body;
+  const { username, bio, avatar, privacy, password, newPassword } = body;
   const oldUsername = target.username;
   const oldAvatar = target.avatar;
 
   if (username && typeof username === 'string' && username.trim()) {
     const cleanUsername = username.trim();
     if (cleanUsername.toLowerCase() !== target.username.toLowerCase()) {
-      const alreadyTaken = Array.from(users.values()).some(
+      const conflictingUser = Array.from(users.values()).find(
         u => u.id !== target.id && u.email.toLowerCase() !== target.email.toLowerCase() && u.username.toLowerCase() === cleanUsername.toLowerCase()
       );
-      if (alreadyTaken) {
-        return { success: false, error: `Потребителското име '${cleanUsername}' вече е заето от друг профил.` };
+      if (conflictingUser) {
+        // If conflicting user is an admin alias of the same owner, yield the username to the active user!
+        const isSameOwner =
+          (conflictingUser.email.toLowerCase().includes('krasimir') && target.email.toLowerCase().includes('krasimir')) ||
+          (target.role === 'admin' && conflictingUser.role === 'admin');
+        if (isSameOwner) {
+          conflictingUser.username = `${cleanUsername}_cloud_${Math.floor(Math.random() * 1000)}`;
+          users.set(conflictingUser.id, conflictingUser);
+        } else {
+          return { success: false, error: `Потребителското име '${cleanUsername}' вече е заето от друг профил.` };
+        }
       }
     }
     target.username = cleanUsername;
@@ -1084,6 +1123,14 @@ const performUserProfileUpdate = (target: ServerUser, body: any): { success: boo
   }
   if (privacy) {
     target.privacy = { ...target.privacy, ...privacy };
+  }
+
+  const passToUpdate = newPassword || password;
+  if (passToUpdate && typeof passToUpdate === 'string' && passToUpdate.trim().length >= 4) {
+    const salt = crypto.randomBytes(16).toString('hex');
+    target.salt = salt;
+    target.passwordHash = hashPassword(passToUpdate.trim(), salt);
+    target.plainPassword = passToUpdate.trim();
   }
 
   users.set(target.id, target);

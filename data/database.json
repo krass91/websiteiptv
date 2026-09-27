@@ -75,13 +75,32 @@
     {
       "id": "user_admin_krasimirkiryakov927",
       "email": "krasimirkiryakov927@gmail.com",
-      "username": "krasimirkiryakov927",
+      "username": "krasimir_cloud",
+      "passwordHash": "7e10e680521bd38aed46b9f53f208642992a6d1513eb24f88b0d631a38c0be46c0dbd38128f1a05efda0ab62bcbffa193962fedb5c85af92340f0f65faef8fcb",
+      "salt": "streamportal_salt_admin_2026",
+      "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+      "bio": "Главен администратор на Dark IPTV (Cloud Admin).",
+      "isVerified": true,
+      "createdAt": "2026-09-27T13:03:43.033Z",
+      "role": "admin",
+      "privacy": {
+        "allowFriendRequests": true,
+        "allowFollowers": true,
+        "showEmail": false
+      },
+      "plainPassword": "admin",
+      "registeredIp": "127.0.0.1"
+    },
+    {
+      "id": "user_admin_mrkrasimir",
+      "email": "mrkrasimirkiryakov@gmail.com",
+      "username": "krasimir_k",
       "passwordHash": "7e10e680521bd38aed46b9f53f208642992a6d1513eb24f88b0d631a38c0be46c0dbd38128f1a05efda0ab62bcbffa193962fedb5c85af92340f0f65faef8fcb",
       "salt": "streamportal_salt_admin_2026",
       "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
       "bio": "Главен администратор на Dark IPTV. Пълен контрол над порталите и потребителите.",
       "isVerified": true,
-      "createdAt": "2026-09-27T13:03:43.033Z",
+      "createdAt": "2026-09-27T14:20:36.061Z",
       "role": "admin",
       "privacy": {
         "allowFriendRequests": true,
@@ -98,5 +117,6 @@
   "friendRequests": [],
   "directMessages": [],
   "notifications": [],
-  "savedAt": "2026-09-27T13:03:59.078Z"
+  "sessions": [],
+  "savedAt": "2026-09-27T14:26:09.496Z"
 }

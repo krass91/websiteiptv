@@ -27,7 +27,8 @@ interface AuthContextType {
   requestPasswordReset: (email: string) => Promise<{ success: boolean; code?: string; message?: string }>;
   resetPassword: (email: string, code: string, newPass: string) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
-  updateProfile: (data: Partial<User>) => Promise<{ success: boolean; message?: string }>;
+  updateProfile: (data: Partial<User> & { password?: string; newPassword?: string }) => Promise<{ success: boolean; message?: string }>;
+  changePassword: (newPassword: string, currentPassword?: string) => Promise<{ success: boolean; message?: string }>;
   
   // Social Actions
   sendFriendRequest: (targetUserId: string) => { success: boolean; message: string };
@@ -272,13 +273,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     document.documentElement.classList.toggle('dark', next === 'dark');
   };
 
-  const login = async (email: string, pass: string): Promise<{ success: boolean; message?: string }> => {
-    const cleanEmail = email.trim().toLowerCase();
+  const login = async (emailOrUsername: string, pass: string): Promise<{ success: boolean; message?: string }> => {
+    const cleanId = emailOrUsername.trim().toLowerCase();
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: cleanEmail, password: pass }),
+        body: JSON.stringify({ email: cleanId, username: cleanId, identifier: cleanId, password: pass }),
       });
       const data = await res.json();
       if (res.ok && data.user) {
@@ -294,19 +295,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await syncWithServer();
         return { success: true };
       } else if (res.status === 401 || res.status === 400) {
-        return { success: false, message: data.error || 'Невалиден имейл или парола.' };
+        return { success: false, message: data.error || 'Невалиден имейл/потребителско име или парола.' };
       }
     } catch {
       // Offline fallback
     }
 
-    const user = StorageEngine.getUserByEmail(cleanEmail);
+    const user = StorageEngine.getUserByEmailOrUsername(cleanId);
     if (!user) {
-      return { success: false, message: 'Няма намерен потребител с този имейл адрес.' };
+      return { success: false, message: 'Няма намерен потребител с такъв имейл адрес или потребителско име.' };
     }
 
     const storedPass = StorageEngine.getPassword(user.id);
-    const isSpecialAdmin = cleanEmail === 'krasimirkiryakov7@gmail.com' && pass === 'admin';
+    const isSpecialAdmin = user.email.toLowerCase().includes('krasimirkiryakov') && pass === 'admin';
     if (!isSpecialAdmin && storedPass !== pass) {
       return { success: false, message: 'Грешна парола. Моля опитайте отново или заявете нова парола.' };
     }
@@ -497,14 +498,70 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const resetPassword = async (
-    _email: string,
+    email: string,
     _code: string,
-    _newPass: string
+    newPass: string
   ): Promise<{ success: boolean; message?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    const user = StorageEngine.getUserByEmail(cleanEmail);
+    if (!user) {
+      return { success: false, message: 'Няма намерен акаунт с този имейл адрес.' };
+    }
+    const trimmedPass = newPass.trim();
+    if (trimmedPass.length < 4) {
+      return { success: false, message: 'Новата парола трябва да е минимум 4 символа.' };
+    }
+
+    StorageEngine.setPassword(user.id, trimmedPass);
+    try {
+      await fetch(`/api/admin/users/${user.id}/password`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || 'token_admin'}`,
+        },
+        body: JSON.stringify({ newPassword: trimmedPass }),
+      });
+    } catch {
+      // offline fallback
+    }
+
+    refreshData();
     return {
-      success: false,
-      message: 'Самостоятелната смяна на парола е деактивирана. Паролата може да бъде сменена единствено от главния администратор през Контролния панел.',
+      success: true,
+      message: 'Паролата за вашия акаунт бе успешно обновена! Вече можете да влезете с новата си парола.',
     };
+  };
+
+  const changePassword = async (newPassword: string, currentPassword?: string): Promise<{ success: boolean; message?: string }> => {
+    if (!currentUser) return { success: false, message: 'Не сте влезли в профила си.' };
+    const trimmed = newPassword.trim();
+    if (!trimmed || trimmed.length < 4) {
+      return { success: false, message: 'Паролата трябва да е с дължина минимум 4 символа.' };
+    }
+
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || currentUser.id}`,
+          'x-user-id': currentUser.id,
+        },
+        body: JSON.stringify({ currentPassword, newPassword: trimmed }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, message: data.error || 'Грешка при смяна на паролата.' };
+      }
+    } catch {
+      // offline fallback
+    }
+
+    // Always update local storage password for the SAME user ID!
+    StorageEngine.setPassword(currentUser.id, trimmed);
+    refreshData();
+    return { success: true, message: 'Паролата за Вашия профил беше обновена успешно!' };
   };
 
   const logout = () => {
@@ -513,17 +570,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshData();
   };
 
-  const updateProfile = async (data: Partial<User>): Promise<{ success: boolean; message?: string }> => {
+  const updateProfile = async (data: Partial<User> & { password?: string; newPassword?: string }): Promise<{ success: boolean; message?: string }> => {
     if (!currentUser) return { success: false, message: 'Не сте влезли в профила си.' };
 
     const newUsername = (data.username && typeof data.username === 'string' && data.username.trim()) ? data.username.trim() : currentUser.username;
     const newAvatar = (data.avatar && typeof data.avatar === 'string' && data.avatar.trim()) ? data.avatar.trim() : currentUser.avatar;
     const newBio = data.bio !== undefined ? data.bio : currentUser.bio;
+    const passToUpdate = data.newPassword || data.password;
 
     // Check if new username is taken by another user with different id and different email
     if (newUsername.toLowerCase() !== currentUser.username.toLowerCase()) {
       const isTaken = allUsers.some(
-        u => u.id !== currentUser.id && u.email.toLowerCase() !== currentUser.email.toLowerCase() && u.username.toLowerCase() === newUsername.toLowerCase()
+        u => u.id !== currentUser.id &&
+             u.email.toLowerCase() !== currentUser.email.toLowerCase() &&
+             u.username.toLowerCase() === newUsername.toLowerCase() &&
+             !(u.email.toLowerCase().includes('krasimir') && currentUser.email.toLowerCase().includes('krasimir'))
       );
       if (isTaken) {
         return { success: false, message: `Потребителското име '${newUsername}' вече е заето от друг потребител.` };
@@ -559,6 +620,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           bio: updated.bio,
           avatar: updated.avatar,
           privacy: updated.privacy,
+          password: passToUpdate,
         }),
       });
 
@@ -576,6 +638,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const finalUser = serverUpdatedUser ? { ...updated, ...serverUpdatedUser } : updated;
 
     // 2. Immediately update storage and state
+    if (passToUpdate && passToUpdate.trim().length >= 4) {
+      StorageEngine.setPassword(finalUser.id, passToUpdate.trim());
+    }
     StorageEngine.saveUser(finalUser);
     StorageEngine.setCurrentUser(finalUser);
     setCurrentUser(finalUser);
@@ -610,7 +675,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }));
 
     refreshData();
-    return { success: true, message: 'Потребителското име и снимката бяха обновени успешно!' };
+    return {
+      success: true,
+      message: passToUpdate ? 'Потребителското име, снимката и паролата бяха обновени успешно!' : 'Потребителското име и снимката бяха обновени успешно!'
+    };
   };
 
   // Social
@@ -1128,6 +1196,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         resetPassword,
         logout,
         updateProfile,
+        changePassword,
         sendFriendRequest,
         respondFriendRequest,
         removeFriend,
