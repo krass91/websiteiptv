@@ -123,6 +123,25 @@ const friendRequests: Map<string, ServerFriendRequest> = new Map();
 let directMessages: ServerDirectMessage[] = [];
 let notifications: ServerNotification[] = [];
 
+// Helper to deduplicate messages by ID and content signature within 4-second window
+const deduplicateMessages = (msgs: ServerDirectMessage[]): ServerDirectMessage[] => {
+  const result: ServerDirectMessage[] = [];
+  const seenIds = new Set<string>();
+  const seenSignatures = new Set<string>();
+
+  for (const m of msgs) {
+    if (!m?.id || seenIds.has(m.id)) continue;
+    const timeBucket = Math.floor(new Date(m.createdAt).getTime() / 4000);
+    const sig = `${m.senderId}_${m.recipientId}_${m.content.trim()}_${timeBucket}`;
+    if (seenSignatures.has(sig)) continue;
+
+    seenIds.add(m.id);
+    seenSignatures.add(sig);
+    result.push(m);
+  }
+  return result;
+};
+
 // Central Persistent Storage on Disk
 const DATA_DIR = path.resolve(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'database.json');
@@ -132,6 +151,7 @@ const saveDatabase = () => {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
+    directMessages = deduplicateMessages(directMessages);
     const data = {
       users: Array.from(users.values()),
       posts: Array.from(posts.values()),
@@ -170,7 +190,7 @@ const loadDatabase = () => {
         data.friendRequests.forEach((fr: ServerFriendRequest) => friendRequests.set(fr.id, fr));
       }
       if (Array.isArray(data.directMessages)) {
-        directMessages = data.directMessages;
+        directMessages = deduplicateMessages(data.directMessages);
       }
       if (Array.isArray(data.notifications)) {
         notifications = data.notifications;
@@ -194,7 +214,8 @@ const initDb = () => {
   // Ensure default admin users exist
   const adminConfigs = [
     { email: 'krasimirkiryakov7@gmail.com', preferredId: 'user_krasimir_admin', defaultUsername: 'krasimir_admin' },
-    { email: 'krasimirkiryakov927@gmail.com', preferredId: 'user_admin_krasimirkiryakov927', defaultUsername: 'krasimir' }
+    { email: 'krasimirkiryakov927@gmail.com', preferredId: 'user_admin_krasimirkiryakov927', defaultUsername: 'krasimir' },
+    { email: 'mrkrasimirkiryakov@gmail.com', preferredId: 'user_admin_mrkrasimir', defaultUsername: 'krasimir_k' }
   ];
 
   for (const cfg of adminConfigs) {
@@ -854,7 +875,7 @@ app.post('/api/social/friend-respond', authMiddleware, (req: Request, res: Respo
 // Social: Send Direct Message
 app.post('/api/social/message', authMiddleware, (req: Request, res: Response) => {
   const currentUser = (req as any).user as ServerUser;
-  const { recipientId, content } = req.body;
+  const { recipientId, content, id } = req.body;
 
   if (!recipientId || !content?.trim()) {
     res.status(400).json({ error: 'Получателят и текстът са задължителни.' });
@@ -873,26 +894,52 @@ app.post('/api/social/message', authMiddleware, (req: Request, res: Response) =>
     return;
   }
 
+  const cleanContent = content.trim();
+  const messageId = (id && typeof id === 'string' && id.trim()) 
+    ? id.trim() 
+    : `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+  // 1. De-duplication check: Message with this ID already exists
+  const existingById = directMessages.find(m => m.id === messageId);
+  if (existingById) {
+    res.status(200).json({ success: true, message: existingById });
+    return;
+  }
+
+  // 2. De-duplication check: Identical message sent between same users within the last 4 seconds
+  const now = Date.now();
+  const recentDuplicate = directMessages.find(m =>
+    m.senderId === currentUser.id &&
+    m.recipientId === recipient.id &&
+    m.content.trim() === cleanContent &&
+    Math.abs(now - new Date(m.createdAt).getTime()) < 4000
+  );
+  if (recentDuplicate) {
+    res.status(200).json({ success: true, message: recentDuplicate });
+    return;
+  }
+
   const newMsg: ServerDirectMessage = {
-    id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+    id: messageId,
     senderId: currentUser.id,
     senderUsername: currentUser.username,
     senderAvatar: currentUser.avatar,
     recipientId: recipient.id,
     recipientUsername: recipient.username,
-    content: content.trim(),
+    content: cleanContent,
     createdAt: new Date().toISOString(),
     read: false,
   };
 
   directMessages.push(newMsg);
+  directMessages = deduplicateMessages(directMessages);
 
   notifications.push({
     id: `notif_${Date.now()}`,
     userId: recipient.id,
     type: 'direct_message',
     title: 'Ново лично съобщение',
-    message: `${currentUser.username}: ${content.trim().substring(0, 45)}...`,
+    message: `${currentUser.username}: ${cleanContent.substring(0, 45)}...`,
     fromUser: {
       id: currentUser.id,
       username: currentUser.username,
@@ -1011,27 +1058,9 @@ app.post('/api/social/notification-read-all', authMiddleware, (req: Request, res
   res.json({ success: true });
 });
 
-// Users: Update Profile
-app.put('/api/users/:id', authMiddleware, (req: Request, res: Response) => {
-  const currentUser = (req as any).user as ServerUser;
-  const { id } = req.params;
-
-  let target = users.get(id);
-  if (!target) {
-    target = Array.from(users.values()).find(u => u.id === id || u.email.toLowerCase() === id.toLowerCase());
-  }
-
-  if (!target) {
-    res.status(404).json({ error: 'Потребителят не е намерен.' });
-    return;
-  }
-
-  if (currentUser.id !== target.id && currentUser.email.toLowerCase() !== target.email.toLowerCase() && currentUser.role !== 'admin') {
-    res.status(403).json({ error: 'Нямате право да редактирате този профил.' });
-    return;
-  }
-
-  const { username, bio, avatar, privacy } = req.body;
+// Helper to update a user's profile and cascade changes across posts, comments, messages
+const performUserProfileUpdate = (target: ServerUser, body: any): { success: boolean; error?: string; user?: any } => {
+  const { username, bio, avatar, privacy } = body;
   const oldUsername = target.username;
   const oldAvatar = target.avatar;
 
@@ -1042,8 +1071,7 @@ app.put('/api/users/:id', authMiddleware, (req: Request, res: Response) => {
         u => u.id !== target.id && u.email.toLowerCase() !== target.email.toLowerCase() && u.username.toLowerCase() === cleanUsername.toLowerCase()
       );
       if (alreadyTaken) {
-        res.status(409).json({ error: 'Потребителското име вече е заето от друг профил.' });
-        return;
+        return { success: false, error: `Потребителското име '${cleanUsername}' вече е заето от друг профил.` };
       }
     }
     target.username = cleanUsername;
@@ -1077,7 +1105,6 @@ app.put('/api/users/:id', authMiddleware, (req: Request, res: Response) => {
       }
     }
 
-    // Cascade to friendRequests
     for (const fr of friendRequests.values()) {
       if (fr.fromUserId === target.id || (fr.fromUser && fr.fromUser.username === oldUsername)) {
         fr.fromUser.username = target.username;
@@ -1085,7 +1112,6 @@ app.put('/api/users/:id', authMiddleware, (req: Request, res: Response) => {
       }
     }
 
-    // Cascade to directMessages
     for (const msg of directMessages) {
       if (msg.senderId === target.id || msg.senderUsername === oldUsername) {
         msg.senderUsername = target.username;
@@ -1096,7 +1122,6 @@ app.put('/api/users/:id', authMiddleware, (req: Request, res: Response) => {
       }
     }
 
-    // Cascade to notifications
     for (const notif of notifications) {
       if (notif.fromUser && (notif.fromUser.id === target.id || notif.fromUser.username === oldUsername)) {
         notif.fromUser.username = target.username;
@@ -1106,8 +1131,46 @@ app.put('/api/users/:id', authMiddleware, (req: Request, res: Response) => {
   }
 
   saveDatabase();
+  return { success: true, user: getSafeUser(target) };
+};
 
-  res.json({ user: getSafeUser(target), message: 'Профилът е обновен успешно.' });
+// Users: Update Own Profile directly
+app.post('/api/users/profile', authMiddleware, (req: Request, res: Response) => {
+  const currentUser = (req as any).user as ServerUser;
+  const result = performUserProfileUpdate(currentUser, req.body);
+  if (!result.success) {
+    res.status(409).json({ error: result.error });
+    return;
+  }
+  res.json({ user: result.user, message: 'Профилът е обновен успешно.' });
+});
+
+// Users: Update Profile by ID
+app.put('/api/users/:id', authMiddleware, (req: Request, res: Response) => {
+  const currentUser = (req as any).user as ServerUser;
+  const { id } = req.params;
+
+  let target = users.get(id);
+  if (!target) {
+    target = Array.from(users.values()).find(u => u.id === id || u.email.toLowerCase() === id.toLowerCase() || u.username.toLowerCase() === id.toLowerCase());
+  }
+
+  if (!target) {
+    target = currentUser;
+  }
+
+  if (currentUser.id !== target.id && currentUser.email.toLowerCase() !== target.email.toLowerCase() && currentUser.role !== 'admin') {
+    res.status(403).json({ error: 'Нямате право да редактирате този профил.' });
+    return;
+  }
+
+  const result = performUserProfileUpdate(target, req.body);
+  if (!result.success) {
+    res.status(409).json({ error: result.error });
+    return;
+  }
+
+  res.json({ user: result.user, message: 'Профилът е обновен успешно.' });
 });
 
 // Posts: Strict Access Control Protected Route

@@ -87,10 +87,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastLoadedUserIdRef = useRef<string | null>(null);
 
-  // Sync profile form state whenever currentUser changes
+  // Sync profile form state only when switching users or on initial mount, not on every background poll
   useEffect(() => {
-    if (currentUser) {
+    if (currentUser && lastLoadedUserIdRef.current !== currentUser.id) {
+      lastLoadedUserIdRef.current = currentUser.id;
       setUsername(currentUser.username);
       setBio(currentUser.bio || '');
       setAvatar(currentUser.avatar);
@@ -98,7 +100,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       setAllowFollowers(currentUser.privacy.allowFollowers ?? true);
       setShowEmail(currentUser.privacy.showEmail ?? false);
     }
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   // Messages Chat state
   const [selectedChatUserId, setSelectedChatUserId] = useState<string | null>(null);
@@ -106,7 +108,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [conversationSearch, setConversationSearch] = useState('');
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
-  // Group messages into conversations with "кой ми е писал"
+  // Group messages into conversations with "кой ми е писал", deduplicating cleanly
   const conversations: ConversationGroup[] = useMemo(() => {
     if (!currentUser) return [];
     const allMsgs = directMessages.length > 0 ? directMessages : StorageEngine.getMessages();
@@ -129,7 +131,17 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       if (!map.has(otherId)) {
         map.set(otherId, []);
       }
-      map.get(otherId)!.push(m);
+
+      const list = map.get(otherId)!;
+      const timeBucket = Math.floor(new Date(m.createdAt).getTime() / 4000);
+      const isDup = list.some(existing => 
+        existing.id === m.id || 
+        (existing.senderId === m.senderId && existing.recipientId === m.recipientId && existing.content.trim() === m.content.trim() && Math.abs(timeBucket - Math.floor(new Date(existing.createdAt).getTime() / 4000)) <= 1)
+      );
+
+      if (!isDup) {
+        list.push(m);
+      }
     }
 
     const result: ConversationGroup[] = [];
@@ -194,14 +206,44 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        alert('Изображението е по-голямо от 2MB. Моля изберете по-малък файл.');
+      if (!file.type.startsWith('image/')) {
+        setErrorMessage('Моля изберете графичен файл (JPG, PNG, WebP).');
         return;
       }
+      setErrorMessage(null);
       const reader = new FileReader();
       reader.onload = () => {
         if (typeof reader.result === 'string') {
-          setAvatar(reader.result);
+          // Resize image via Canvas to max 256x256 for instant upload & storage
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const maxDim = 256;
+            let width = img.width;
+            let height = img.height;
+            if (width > height) {
+              if (width > maxDim) {
+                height = Math.round((height * maxDim) / width);
+                width = maxDim;
+              }
+            } else {
+              if (height > maxDim) {
+                width = Math.round((width * maxDim) / height);
+                height = maxDim;
+              }
+            }
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(img, 0, 0, width, height);
+              const compressed = canvas.toDataURL('image/jpeg', 0.85);
+              setAvatar(compressed);
+            } else {
+              setAvatar(reader.result as string);
+            }
+          };
+          img.src = reader.result;
         }
       };
       reader.readAsDataURL(file);
@@ -212,6 +254,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     e.preventDefault();
     if (isSubmitting) return;
     setErrorMessage(null);
+    setSavedSuccess(false);
+
+    if (!username.trim()) {
+      setErrorMessage('Потребителското име не може да бъде празно.');
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {

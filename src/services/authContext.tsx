@@ -526,7 +526,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         u => u.id !== currentUser.id && u.email.toLowerCase() !== currentUser.email.toLowerCase() && u.username.toLowerCase() === newUsername.toLowerCase()
       );
       if (isTaken) {
-        return { success: false, message: 'Това потребителско име вече е заето от друг потребител.' };
+        return { success: false, message: `Потребителското име '${newUsername}' вече е заето от друг потребител.` };
       }
     }
 
@@ -544,43 +544,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       },
     };
 
-    // 1. Immediately update localStorage and state
-    StorageEngine.saveUser(updated);
-    setCurrentUser(updated);
-
-    // Update allUsers in local state with the updated user
-    setAllUsers(prev => prev.map(u => (u.id === updated.id || u.email.toLowerCase() === updated.email.toLowerCase() ? updated : u)));
-
-    // Cascade username and avatar to local posts
-    setAllPosts(prev => prev.map(p => {
-      if (p.userId === updated.id || p.authorName === currentUser.username) {
-        return { ...p, authorName: updated.username, authorAvatar: updated.avatar };
-      }
-      return p;
-    }));
-
-    // Cascade username and avatar to directMessages
-    setDirectMessages(prev => prev.map(m => {
-      let changed = false;
-      let sName = m.senderUsername;
-      let sAv = m.senderAvatar;
-      let rName = m.recipientUsername;
-      if (m.senderId === updated.id || m.senderUsername === currentUser.username) {
-        sName = updated.username;
-        sAv = updated.avatar;
-        changed = true;
-      }
-      if (m.recipientId === updated.id || m.recipientUsername === currentUser.username) {
-        rName = updated.username;
-        changed = true;
-      }
-      return changed ? { ...m, senderUsername: sName, senderAvatar: sAv, recipientUsername: rName } : m;
-    }));
-
-    // 2. Persist to server via PUT /api/users/:id
+    // 1. Persist to server via direct profile endpoint
+    let serverUpdatedUser: User | null = null;
     try {
-      const res = await fetch(`/api/users/${currentUser.id}`, {
-        method: 'PUT',
+      const res = await fetch('/api/users/profile', {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || currentUser.id}`,
@@ -594,19 +562,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }),
       });
 
-      if (res.ok) {
-        const resData = await res.json();
-        if (resData.user) {
-          StorageEngine.saveUser(resData.user);
-          setCurrentUser(resData.user);
-        }
+      const resData = await res.json();
+      if (!res.ok) {
+        return { success: false, message: resData.error || 'Грешка при обновяване на профила на сървъра.' };
+      }
+      if (resData.user) {
+        serverUpdatedUser = resData.user as User;
       }
     } catch {
-      // offline fallback, already saved locally
+      // offline fallback
     }
 
+    const finalUser = serverUpdatedUser ? { ...updated, ...serverUpdatedUser } : updated;
+
+    // 2. Immediately update storage and state
+    StorageEngine.saveUser(finalUser);
+    StorageEngine.setCurrentUser(finalUser);
+    setCurrentUser(finalUser);
+
+    // Update allUsers in local state with the updated user
+    setAllUsers(prev => prev.map(u => (u.id === finalUser.id || u.email.toLowerCase() === finalUser.email.toLowerCase() ? finalUser : u)));
+
+    // Cascade username and avatar to local posts
+    setAllPosts(prev => prev.map(p => {
+      if (p.userId === finalUser.id || p.authorName === currentUser.username) {
+        return { ...p, authorName: finalUser.username, authorAvatar: finalUser.avatar };
+      }
+      return p;
+    }));
+
+    // Cascade username and avatar to directMessages
+    setDirectMessages(prev => prev.map(m => {
+      let changed = false;
+      let sName = m.senderUsername;
+      let sAv = m.senderAvatar;
+      let rName = m.recipientUsername;
+      if (m.senderId === finalUser.id || m.senderUsername === currentUser.username) {
+        sName = finalUser.username;
+        sAv = finalUser.avatar;
+        changed = true;
+      }
+      if (m.recipientId === finalUser.id || m.recipientUsername === currentUser.username) {
+        rName = finalUser.username;
+        changed = true;
+      }
+      return changed ? { ...m, senderUsername: sName, senderAvatar: sAv, recipientUsername: rName } : m;
+    }));
+
     refreshData();
-    return { success: true, message: 'Профилът и снимката бяха обновени успешно!' };
+    return { success: true, message: 'Потребителското име и снимката бяха обновени успешно!' };
   };
 
   // Social
@@ -791,7 +795,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setDirectMessages(StorageEngine.getMessages());
     refreshData();
 
-    // 2. Transmit to server
+    // 2. Transmit to server with matching ID
     try {
       const res = await fetch('/api/social/message', {
         method: 'POST',
@@ -800,7 +804,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || currentUser.id}`,
           'x-user-id': currentUser.id,
         },
-        body: JSON.stringify({ recipientId: recipient.id, content: trimmed }),
+        body: JSON.stringify({ id: newMsg.id, recipientId: recipient.id, content: trimmed }),
       });
 
       if (res.ok) {

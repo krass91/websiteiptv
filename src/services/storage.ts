@@ -301,19 +301,53 @@ export class StorageEngine {
     if (!Array.isArray(serverMsgs)) return;
     const local = this.getMessages();
     const map = new Map<string, DirectMessage>();
+
+    // Seed with local messages
     local.forEach(m => {
       if (m?.id) map.set(m.id, m);
     });
-    serverMsgs.forEach(m => {
-      if (m?.id) {
-        const existing = map.get(m.id);
-        map.set(m.id, existing ? { ...existing, ...m } : m);
+
+    // Merge server messages, de-duplicating by ID and signature
+    serverMsgs.forEach(sMsg => {
+      if (!sMsg?.id) return;
+      if (map.has(sMsg.id)) {
+        const existing = map.get(sMsg.id)!;
+        map.set(sMsg.id, { ...existing, ...sMsg });
+      } else {
+        // Look for recent local duplicate (same sender, recipient, content within 4 seconds)
+        const duplicateLocal = Array.from(map.values()).find(loc =>
+          loc.senderId === sMsg.senderId &&
+          loc.recipientId === sMsg.recipientId &&
+          loc.content.trim() === sMsg.content.trim() &&
+          Math.abs(new Date(loc.createdAt).getTime() - new Date(sMsg.createdAt).getTime()) < 4000
+        );
+
+        if (duplicateLocal) {
+          map.delete(duplicateLocal.id);
+          map.set(sMsg.id, sMsg);
+        } else {
+          map.set(sMsg.id, sMsg);
+        }
       }
     });
-    const merged = Array.from(map.values()).sort(
+
+    // Final signature de-duplication
+    const uniqueList: DirectMessage[] = [];
+    const seenSigs = new Set<string>();
+    const sorted = Array.from(map.values()).sort(
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
     );
-    this.set(STORAGE_KEYS.MESSAGES, merged);
+
+    for (const msg of sorted) {
+      const timeBucket = Math.floor(new Date(msg.createdAt).getTime() / 4000);
+      const sig = `${msg.senderId}_${msg.recipientId}_${msg.content.trim()}_${timeBucket}`;
+      if (!seenSigs.has(sig)) {
+        seenSigs.add(sig);
+        uniqueList.push(msg);
+      }
+    }
+
+    this.set(STORAGE_KEYS.MESSAGES, uniqueList);
   }
 
   static syncNotifications(serverNotifs: NotificationItem[]): void {
@@ -627,7 +661,22 @@ export class StorageEngine {
 
   // Direct Messages
   static getMessages(): DirectMessage[] {
-    return this.get<DirectMessage[]>(STORAGE_KEYS.MESSAGES, []);
+    const raw = this.get<DirectMessage[]>(STORAGE_KEYS.MESSAGES, []);
+    const unique: DirectMessage[] = [];
+    const seenIds = new Set<string>();
+    const seenSigs = new Set<string>();
+
+    for (const m of raw) {
+      if (!m?.id || seenIds.has(m.id)) continue;
+      const timeBucket = Math.floor(new Date(m.createdAt).getTime() / 4000);
+      const sig = `${m.senderId}_${m.recipientId}_${m.content.trim()}_${timeBucket}`;
+      if (!seenSigs.has(sig)) {
+        seenIds.add(m.id);
+        seenSigs.add(sig);
+        unique.push(m);
+      }
+    }
+    return unique;
   }
 
   static getConversation(userAId: string, userBId: string, userAName?: string, userBName?: string): DirectMessage[] {
@@ -649,16 +698,30 @@ export class StorageEngine {
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }
 
-  static sendDirectMessage(sender: User, recipient: User, content: string): DirectMessage {
+  static sendDirectMessage(sender: User, recipient: User, content: string, customId?: string): DirectMessage {
     const all = this.getMessages();
+    const cleanContent = content.trim();
+
+    // Check if duplicate message already exists
+    const now = Date.now();
+    const recentDup = all.find(m =>
+      m.senderId === sender.id &&
+      m.recipientId === recipient.id &&
+      m.content.trim() === cleanContent &&
+      Math.abs(now - new Date(m.createdAt).getTime()) < 4000
+    );
+    if (recentDup) {
+      return recentDup;
+    }
+
     const newMsg: DirectMessage = {
-      id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      id: customId || `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       senderId: sender.id,
       senderUsername: sender.username,
       senderAvatar: sender.avatar,
       recipientId: recipient.id,
       recipientUsername: recipient.username,
-      content: content.trim(),
+      content: cleanContent,
       createdAt: new Date().toISOString(),
       read: false,
     };

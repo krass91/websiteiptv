@@ -104,14 +104,30 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const conversation: DirectMessage[] = useMemo(() => {
     if (!currentUser || !targetUser) return [];
     const all = directMessages.length > 0 ? directMessages : StorageEngine.getMessages();
-    return all
-      .filter(m => 
-        (m.senderId === currentUser.id && m.recipientId === targetUser.id) ||
-        (m.senderId === targetUser.id && m.recipientId === currentUser.id) ||
-        (m.senderUsername?.toLowerCase() === currentUser.username.toLowerCase() && m.recipientUsername?.toLowerCase() === targetUser.username.toLowerCase()) ||
-        (m.senderUsername?.toLowerCase() === targetUser.username.toLowerCase() && m.recipientUsername?.toLowerCase() === currentUser.username.toLowerCase())
-      )
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const filtered = all.filter(m => 
+      (m.senderId === currentUser.id && m.recipientId === targetUser.id) ||
+      (m.senderId === targetUser.id && m.recipientId === currentUser.id) ||
+      (m.senderUsername?.toLowerCase() === currentUser.username.toLowerCase() && m.recipientUsername?.toLowerCase() === targetUser.username.toLowerCase()) ||
+      (m.senderUsername?.toLowerCase() === targetUser.username.toLowerCase() && m.recipientUsername?.toLowerCase() === currentUser.username.toLowerCase())
+    );
+
+    // Deduplicate in display: ensure no message with same ID or signature is shown twice
+    const unique: DirectMessage[] = [];
+    const seenIds = new Set<string>();
+    const seenSigs = new Set<string>();
+
+    for (const msg of filtered) {
+      if (!msg?.id || seenIds.has(msg.id)) continue;
+      const timeBucket = Math.floor(new Date(msg.createdAt).getTime() / 4000);
+      const sig = `${msg.senderId}_${msg.recipientId}_${msg.content.trim()}_${timeBucket}`;
+      if (seenSigs.has(sig)) continue;
+
+      seenIds.add(msg.id);
+      seenSigs.add(sig);
+      unique.push(msg);
+    }
+
+    return unique.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }, [currentUser, targetUser, directMessages]);
 
   const triggerFeedback = (text: string, error = false) => {
