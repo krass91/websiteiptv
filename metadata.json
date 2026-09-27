@@ -1,0 +1,8 @@
+{
+  "name": "StreamPortal IPTV Privé",
+  "description": "Частна защитена платформа за споделяне на IPTV листи, портали и MAC адреси с контрол на достъпа и социални функции.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
