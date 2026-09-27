@@ -140,6 +140,7 @@ const saveDatabase = () => {
       friendRequests: Array.from(friendRequests.values()),
       directMessages,
       notifications,
+      sessions: Array.from(sessions.entries()),
       savedAt: new Date().toISOString(),
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
@@ -174,6 +175,9 @@ const loadDatabase = () => {
       if (Array.isArray(data.notifications)) {
         notifications = data.notifications;
       }
+      if (Array.isArray(data.sessions)) {
+        data.sessions.forEach(([tok, uid]: [string, string]) => sessions.set(tok, uid));
+      }
       console.log(`Loaded from database.json: ${users.size} users, ${posts.size} posts, ${friendRequests.size} requests, ${directMessages.length} messages.`);
     }
   } catch (err) {
@@ -188,15 +192,18 @@ const initDb = () => {
   const salt = 'streamportal_salt_admin_2026';
   
   // Ensure default admin users exist
-  const adminEmails = ['krasimirkiryakov7@gmail.com', 'krasimirkiryakov927@gmail.com'];
-  for (const admEmail of adminEmails) {
-    let existingAdmin = Array.from(users.values()).find(u => u.email.toLowerCase() === admEmail.toLowerCase());
+  const adminConfigs = [
+    { email: 'krasimirkiryakov7@gmail.com', preferredId: 'user_krasimir_admin', defaultUsername: 'krasimir_admin' },
+    { email: 'krasimirkiryakov927@gmail.com', preferredId: 'user_admin_krasimirkiryakov927', defaultUsername: 'krasimir' }
+  ];
+
+  for (const cfg of adminConfigs) {
+    let existingAdmin = users.get(cfg.preferredId) || Array.from(users.values()).find(u => u.email.toLowerCase() === cfg.email.toLowerCase());
     if (!existingAdmin) {
-      const uName = admEmail.split('@')[0];
       const adminUser: ServerUser = {
-        id: `user_admin_${uName}`,
-        email: admEmail,
-        username: uName,
+        id: cfg.preferredId,
+        email: cfg.email,
+        username: cfg.defaultUsername,
         passwordHash: hashPassword('admin', salt),
         salt,
         avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
@@ -316,16 +323,37 @@ const getSafeUser = (u: ServerUser) => {
 // Auth Middleware
 const authMiddleware = (req: Request, res: Response, next: NextFunction): void => {
   const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    res.status(401).json({
-      error: 'Нерегистрираните и нелогнати потребители нямат достъп до заключеното IPTV съдържание.',
-      code: 'UNAUTHENTICATED',
-    });
-    return;
+  const xUserId = (req.headers['x-user-id'] as string)?.trim();
+  const token = authHeader ? authHeader.replace(/^Bearer\s+/, '').trim() : '';
+
+  let userId: string | null = null;
+
+  if (token) {
+    userId = sessions.get(token) || (token.startsWith('user_') ? token : null);
+    if (!userId && users.has(token)) {
+      userId = token;
+    }
   }
 
-  const token = authHeader.replace(/^Bearer\s+/, '');
-  const userId = sessions.get(token) || (token.startsWith('user_') ? token : null);
+  // Fallback 1: x-user-id
+  if ((!userId || !users.has(userId)) && xUserId) {
+    if (users.has(xUserId)) {
+      userId = xUserId;
+    } else {
+      const match = Array.from(users.values()).find(u => u.id === xUserId || u.email.toLowerCase() === xUserId.toLowerCase());
+      if (match) userId = match.id;
+    }
+  }
+
+  // Fallback 2: token lookup in sessions
+  if ((!userId || !users.has(userId)) && token) {
+    for (const [sToken, sUid] of sessions.entries()) {
+      if (sToken === token && users.has(sUid)) {
+        userId = sUid;
+        break;
+      }
+    }
+  }
 
   if (!userId || !users.has(userId)) {
     res.status(401).json({
@@ -554,13 +582,50 @@ app.post('/api/users/sync', (req: Request, res: Response) => {
   if (Array.isArray(incomingUsers)) {
     for (const inUser of incomingUsers) {
       if (!inUser.id || !inUser.email) continue;
-      const existing = users.get(inUser.id) || Array.from(users.values()).find(u => u.email.toLowerCase() === inUser.email.toLowerCase());
-      if (!existing) {
+      const cleanEmail = inUser.email.toLowerCase().trim();
+      const existing = users.get(inUser.id) || Array.from(users.values()).find(u => u.email.toLowerCase() === cleanEmail);
+      if (existing) {
+        // If client has updated nickname, avatar, or bio, update existing user - DO NOT CREATE DUPLICATE!
+        let userMod = false;
+        if (inUser.username && inUser.username.trim() && inUser.username.trim() !== existing.username) {
+          const oldName = existing.username;
+          existing.username = inUser.username.trim();
+          userMod = true;
+          // Cascade update authorName on posts
+          for (const p of posts.values()) {
+            if (p.userId === existing.id || p.authorName === oldName) {
+              p.authorName = existing.username;
+            }
+          }
+        }
+        if (inUser.avatar && inUser.avatar.trim() && inUser.avatar.trim() !== existing.avatar) {
+          existing.avatar = inUser.avatar.trim();
+          userMod = true;
+          // Cascade update authorAvatar on posts
+          for (const p of posts.values()) {
+            if (p.userId === existing.id) {
+              p.authorAvatar = existing.avatar;
+            }
+          }
+        }
+        if (inUser.bio !== undefined && inUser.bio !== existing.bio) {
+          existing.bio = inUser.bio;
+          userMod = true;
+        }
+        if (inUser.privacy) {
+          existing.privacy = { ...existing.privacy, ...inUser.privacy };
+          userMod = true;
+        }
+        if (userMod) {
+          users.set(existing.id, existing);
+          modified = true;
+        }
+      } else {
         // Add new user from client
         const salt = crypto.randomBytes(16).toString('hex');
         const newUser: ServerUser = {
           id: inUser.id,
-          email: inUser.email.toLowerCase(),
+          email: cleanEmail,
           username: inUser.username || inUser.email.split('@')[0],
           passwordHash: hashPassword(inUser.plainPassword || 'password123', salt),
           salt,
@@ -642,10 +707,20 @@ app.post('/api/users/sync', (req: Request, res: Response) => {
 // Social: Get Full Realtime State
 app.get('/api/social/state', (req: Request, res: Response) => {
   const authHeader = req.headers.authorization;
+  const xUserId = (req.headers['x-user-id'] as string)?.trim();
   let currentUserId: string | null = null;
   if (authHeader) {
-    const token = authHeader.replace(/^Bearer\s+/, '');
+    const token = authHeader.replace(/^Bearer\s+/, '').trim();
     currentUserId = sessions.get(token) || (token.startsWith('user_') ? token : null);
+  }
+  if (!currentUserId && xUserId) {
+    currentUserId = xUserId;
+  }
+
+  let matchedUser = currentUserId ? users.get(currentUserId) : null;
+  if (!matchedUser && currentUserId) {
+    matchedUser = Array.from(users.values()).find(u => u.id === currentUserId || u.email.toLowerCase() === currentUserId.toLowerCase());
+    if (matchedUser) currentUserId = matchedUser.id;
   }
 
   const userFriendRequests = currentUserId
@@ -653,8 +728,12 @@ app.get('/api/social/state', (req: Request, res: Response) => {
     : [];
 
   const userMessages = currentUserId
-    ? directMessages.filter(m => m.senderId === currentUserId || m.recipientId === currentUserId)
-    : [];
+    ? directMessages.filter(m => 
+        m.senderId === currentUserId || 
+        m.recipientId === currentUserId ||
+        (matchedUser && (m.senderUsername === matchedUser.username || m.recipientUsername === matchedUser.username))
+      )
+    : directMessages;
 
   const userNotifications = currentUserId
     ? notifications.filter(n => n.userId === currentUserId)
@@ -768,7 +847,13 @@ app.post('/api/social/message', authMiddleware, (req: Request, res: Response) =>
     return;
   }
 
-  const recipient = users.get(recipientId);
+  let recipient = users.get(recipientId);
+  if (!recipient) {
+    recipient = Array.from(users.values()).find(
+      u => u.id === recipientId || u.email.toLowerCase() === recipientId.toLowerCase() || u.username.toLowerCase() === recipientId.toLowerCase()
+    );
+  }
+
   if (!recipient) {
     res.status(404).json({ error: 'Получателят не е намерен.' });
     return;
@@ -779,7 +864,7 @@ app.post('/api/social/message', authMiddleware, (req: Request, res: Response) =>
     senderId: currentUser.id,
     senderUsername: currentUser.username,
     senderAvatar: currentUser.avatar,
-    recipientId,
+    recipientId: recipient.id,
     recipientUsername: recipient.username,
     content: content.trim(),
     createdAt: new Date().toISOString(),
@@ -790,7 +875,7 @@ app.post('/api/social/message', authMiddleware, (req: Request, res: Response) =>
 
   notifications.push({
     id: `notif_${Date.now()}`,
-    userId: recipientId,
+    userId: recipient.id,
     type: 'direct_message',
     title: 'Ново лично съобщение',
     message: `${currentUser.username}: ${content.trim().substring(0, 45)}...`,
@@ -804,7 +889,7 @@ app.post('/api/social/message', authMiddleware, (req: Request, res: Response) =>
   });
 
   saveDatabase();
-  res.status(201).json({ message: newMsg });
+  res.status(201).json({ success: true, message: newMsg });
 });
 
 // Social: Toggle Follow
@@ -904,24 +989,77 @@ app.put('/api/users/:id', authMiddleware, (req: Request, res: Response) => {
   const currentUser = (req as any).user as ServerUser;
   const { id } = req.params;
 
-  if (currentUser.id !== id && currentUser.role !== 'admin') {
-    res.status(403).json({ error: 'Нямате право да редактирате този профил.' });
-    return;
+  let target = users.get(id);
+  if (!target) {
+    target = Array.from(users.values()).find(u => u.id === id || u.email.toLowerCase() === id.toLowerCase());
   }
 
-  const target = users.get(id);
   if (!target) {
     res.status(404).json({ error: 'Потребителят не е намерен.' });
     return;
   }
 
-  const { username, bio, avatar, privacy } = req.body;
-  if (username) target.username = username.trim();
-  if (bio !== undefined) target.bio = bio;
-  if (avatar) target.avatar = avatar;
-  if (privacy) target.privacy = { ...target.privacy, ...privacy };
+  if (currentUser.id !== target.id && currentUser.email.toLowerCase() !== target.email.toLowerCase() && currentUser.role !== 'admin') {
+    res.status(403).json({ error: 'Нямате право да редактирате този профил.' });
+    return;
+  }
 
-  users.set(id, target);
+  const { username, bio, avatar, privacy } = req.body;
+  const oldUsername = target.username;
+  const oldAvatar = target.avatar;
+
+  if (username && typeof username === 'string' && username.trim()) {
+    target.username = username.trim();
+  }
+  if (bio !== undefined && typeof bio === 'string') {
+    target.bio = bio.trim();
+  }
+  if (avatar && typeof avatar === 'string' && avatar.trim()) {
+    target.avatar = avatar.trim();
+  }
+  if (privacy) {
+    target.privacy = { ...target.privacy, ...privacy };
+  }
+
+  users.set(target.id, target);
+
+  // Cascade updates to all posts created by this user
+  if (target.username !== oldUsername || target.avatar !== oldAvatar) {
+    for (const p of posts.values()) {
+      if (p.userId === target.id || p.authorName === oldUsername) {
+        p.authorName = target.username;
+        p.authorAvatar = target.avatar;
+      }
+      if (Array.isArray(p.comments)) {
+        for (const comm of p.comments) {
+          if (comm.userId === target.id || comm.username === oldUsername) {
+            comm.username = target.username;
+            comm.userAvatar = target.avatar;
+          }
+        }
+      }
+    }
+
+    // Cascade to friendRequests
+    for (const fr of friendRequests.values()) {
+      if (fr.fromUserId === target.id && fr.fromUser) {
+        fr.fromUser.username = target.username;
+        fr.fromUser.avatar = target.avatar;
+      }
+    }
+
+    // Cascade to directMessages
+    for (const msg of directMessages) {
+      if (msg.senderId === target.id || msg.senderUsername === oldUsername) {
+        msg.senderUsername = target.username;
+        msg.senderAvatar = target.avatar;
+      }
+      if (msg.recipientId === target.id || msg.recipientUsername === oldUsername) {
+        msg.recipientUsername = target.username;
+      }
+    }
+  }
+
   saveDatabase();
 
   res.json({ user: getSafeUser(target), message: 'Профилът е обновен успешно.' });

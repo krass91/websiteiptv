@@ -244,15 +244,33 @@ export class StorageEngine {
     
     // Seed with local users
     localUsers.forEach(u => map.set(u.id, u));
-    // Merge server users (server is authoritative)
-    serverUsers.forEach(u => map.set(u.id, u));
+    
+    // Merge server users matching by id or email to never duplicate user identities
+    serverUsers.forEach(sUser => {
+      const existingByEmail = Array.from(map.values()).find(
+        u => u.email.toLowerCase() === sUser.email.toLowerCase()
+      );
+      if (existingByEmail) {
+        const mergedUser: User = {
+          ...existingByEmail,
+          ...sUser,
+          id: existingByEmail.id, // Strictly preserve user ID!
+        };
+        map.set(existingByEmail.id, mergedUser);
+      } else {
+        map.set(sUser.id, sUser);
+      }
+    });
 
     const merged = Array.from(map.values());
     this.set(STORAGE_KEYS.USERS, merged);
 
     const current = this.getCurrentUser();
-    if (current && map.has(current.id)) {
-      this.setCurrentUser(map.get(current.id)!);
+    if (current) {
+      const match = map.get(current.id) || Array.from(map.values()).find(u => u.email.toLowerCase() === current.email.toLowerCase());
+      if (match) {
+        this.setCurrentUser({ ...current, ...match, id: current.id });
+      }
     }
   }
 
@@ -268,7 +286,18 @@ export class StorageEngine {
 
   static syncDirectMessages(serverMsgs: DirectMessage[]): void {
     if (!Array.isArray(serverMsgs)) return;
-    this.set(STORAGE_KEYS.MESSAGES, serverMsgs);
+    const local = this.getMessages();
+    const map = new Map<string, DirectMessage>();
+    local.forEach(m => {
+      if (m?.id) map.set(m.id, m);
+    });
+    serverMsgs.forEach(m => {
+      if (m?.id) map.set(m.id, m);
+    });
+    const merged = Array.from(map.values()).sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+    this.set(STORAGE_KEYS.MESSAGES, merged);
   }
 
   static syncNotifications(serverNotifs: NotificationItem[]): void {
@@ -286,18 +315,63 @@ export class StorageEngine {
 
   static saveUser(user: User): void {
     const users = this.getUsers();
-    const idx = users.findIndex(u => u.id === user.id);
+    const idx = users.findIndex(u => u.id === user.id || u.email.toLowerCase() === user.email.toLowerCase());
+    const oldUser = idx >= 0 ? users[idx] : null;
+    const preservedId = oldUser ? oldUser.id : user.id;
+    const updatedUser: User = { ...user, id: preservedId };
+
     if (idx >= 0) {
-      users[idx] = user;
+      users[idx] = updatedUser;
     } else {
-      users.push(user);
+      users.push(updatedUser);
     }
     this.set(STORAGE_KEYS.USERS, users);
 
     // Update current user if matching
     const current = this.getCurrentUser();
-    if (current && current.id === user.id) {
-      this.setCurrentUser(user);
+    if (current && (current.id === updatedUser.id || current.email.toLowerCase() === updatedUser.email.toLowerCase())) {
+      this.setCurrentUser({ ...current, ...updatedUser, id: current.id });
+    }
+
+    // Cascade new username and avatar to all posts by this user
+    const posts = this.getPosts();
+    let postsChanged = false;
+    posts.forEach(p => {
+      if (p.userId === updatedUser.id || (oldUser && p.userId === oldUser.id)) {
+        p.authorName = updatedUser.username;
+        p.authorAvatar = updatedUser.avatar;
+        postsChanged = true;
+      }
+      if (Array.isArray(p.comments)) {
+        p.comments.forEach(c => {
+          if (c.userId === updatedUser.id || (oldUser && c.userId === oldUser.id)) {
+            c.username = updatedUser.username;
+            c.userAvatar = updatedUser.avatar;
+            postsChanged = true;
+          }
+        });
+      }
+    });
+    if (postsChanged) {
+      this.set(STORAGE_KEYS.POSTS, posts);
+    }
+
+    // Cascade new username and avatar to direct messages
+    const msgs = this.getMessages();
+    let msgsChanged = false;
+    msgs.forEach(m => {
+      if (m.senderId === updatedUser.id || (oldUser && m.senderId === oldUser.id)) {
+        m.senderUsername = updatedUser.username;
+        m.senderAvatar = updatedUser.avatar;
+        msgsChanged = true;
+      }
+      if (m.recipientId === updatedUser.id || (oldUser && m.recipientId === oldUser.id)) {
+        m.recipientUsername = updatedUser.username;
+        msgsChanged = true;
+      }
+    });
+    if (msgsChanged) {
+      this.set(STORAGE_KEYS.MESSAGES, msgs);
     }
   }
 
