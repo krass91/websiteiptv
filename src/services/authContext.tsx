@@ -27,7 +27,7 @@ interface AuthContextType {
   requestPasswordReset: (email: string) => Promise<{ success: boolean; code?: string; message?: string }>;
   resetPassword: (email: string, code: string, newPass: string) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
-  updateProfile: (data: Partial<User>) => void;
+  updateProfile: (data: Partial<User>) => Promise<{ success: boolean; message?: string }>;
   
   // Social Actions
   sendFriendRequest: (targetUserId: string) => { success: boolean; message: string };
@@ -38,7 +38,8 @@ interface AuthContextType {
   isFollowing: (targetUserId: string) => boolean;
   
   // Direct Messages
-  sendDirectMessage: (recipientUserId: string, content: string) => { success: boolean; message?: string };
+  directMessages: DirectMessage[];
+  sendDirectMessage: (recipientUserId: string, content: string) => Promise<{ success: boolean; message?: string }>;
   getConversation: (otherUserId: string) => DirectMessage[];
   markConversationAsRead: (otherUserId: string) => void;
   unreadMessagesCount: number;
@@ -76,6 +77,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [allUsers, setAllUsers] = useState<User[]>(() => StorageEngine.getUsers());
   const [allPosts, setAllPosts] = useState<Post[]>(() => StorageEngine.getPosts());
+  const [directMessages, setDirectMessages] = useState<DirectMessage[]>(() => StorageEngine.getMessages());
   const [isUserSearchOpen, setIsUserSearchOpen] = useState<boolean>(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [pendingRequests, setPendingRequests] = useState<FriendRequest[]>([]);
@@ -87,15 +89,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const refreshData = () => {
     setAllUsers(StorageEngine.getUsers());
     setAllPosts(StorageEngine.getPosts());
+    setDirectMessages(StorageEngine.getMessages());
     setTick(t => t + 1);
   };
 
   const syncWithServer = async () => {
     try {
       const token = localStorage.getItem('iptv_auth_token');
+      const activeUser = currentUser || StorageEngine.getCurrentUser();
       const headers: Record<string, string> = {};
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
+      }
+      if (activeUser?.id) {
+        headers['x-user-id'] = activeUser.id;
       }
 
       // 1. Fetch all users from server database across all IPs
@@ -104,7 +111,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const data = await usersRes.json();
         if (Array.isArray(data.users) && data.users.length > 0) {
           StorageEngine.syncUsers(data.users);
-          setAllUsers(data.users);
+          setAllUsers(StorageEngine.getUsers());
         }
       }
 
@@ -124,18 +131,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const sData = await socialRes.json();
         if (Array.isArray(sData.friendRequests)) {
           StorageEngine.syncFriendRequests(sData.friendRequests);
-          if (currentUser) {
-            setPendingRequests(sData.friendRequests.filter((r: FriendRequest) => r.toUserId === currentUser.id && r.status === 'pending'));
+          if (activeUser) {
+            setPendingRequests(sData.friendRequests.filter((r: FriendRequest) => r.toUserId === activeUser.id && r.status === 'pending'));
           }
         }
         if (Array.isArray(sData.notifications)) {
           StorageEngine.syncNotifications(sData.notifications);
-          if (currentUser) {
+          if (activeUser) {
             setNotifications(sData.notifications);
           }
         }
         if (Array.isArray(sData.directMessages)) {
           StorageEngine.syncDirectMessages(sData.directMessages);
+          setDirectMessages(StorageEngine.getMessages());
         }
       }
 
@@ -505,19 +513,100 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshData();
   };
 
-  const updateProfile = (data: Partial<User>) => {
-    if (!currentUser) return;
-    const updated = {
+  const updateProfile = async (data: Partial<User>): Promise<{ success: boolean; message?: string }> => {
+    if (!currentUser) return { success: false, message: 'Не сте влезли в профила си.' };
+
+    const newUsername = (data.username && typeof data.username === 'string' && data.username.trim()) ? data.username.trim() : currentUser.username;
+    const newAvatar = (data.avatar && typeof data.avatar === 'string' && data.avatar.trim()) ? data.avatar.trim() : currentUser.avatar;
+    const newBio = data.bio !== undefined ? data.bio : currentUser.bio;
+
+    // Check if new username is taken by another user with different id and different email
+    if (newUsername.toLowerCase() !== currentUser.username.toLowerCase()) {
+      const isTaken = allUsers.some(
+        u => u.id !== currentUser.id && u.email.toLowerCase() !== currentUser.email.toLowerCase() && u.username.toLowerCase() === newUsername.toLowerCase()
+      );
+      if (isTaken) {
+        return { success: false, message: 'Това потребителско име вече е заето от друг потребител.' };
+      }
+    }
+
+    const updated: User = {
       ...currentUser,
       ...data,
+      id: currentUser.id, // Strictly preserve user ID! Never create a new user!
+      email: currentUser.email, // Never change email
+      username: newUsername,
+      avatar: newAvatar,
+      bio: newBio,
       privacy: {
         ...currentUser.privacy,
         ...(data.privacy || {}),
       },
     };
+
+    // 1. Immediately update localStorage and state
     StorageEngine.saveUser(updated);
     setCurrentUser(updated);
+
+    // Update allUsers in local state with the updated user
+    setAllUsers(prev => prev.map(u => (u.id === updated.id || u.email.toLowerCase() === updated.email.toLowerCase() ? updated : u)));
+
+    // Cascade username and avatar to local posts
+    setAllPosts(prev => prev.map(p => {
+      if (p.userId === updated.id || p.authorName === currentUser.username) {
+        return { ...p, authorName: updated.username, authorAvatar: updated.avatar };
+      }
+      return p;
+    }));
+
+    // Cascade username and avatar to directMessages
+    setDirectMessages(prev => prev.map(m => {
+      let changed = false;
+      let sName = m.senderUsername;
+      let sAv = m.senderAvatar;
+      let rName = m.recipientUsername;
+      if (m.senderId === updated.id || m.senderUsername === currentUser.username) {
+        sName = updated.username;
+        sAv = updated.avatar;
+        changed = true;
+      }
+      if (m.recipientId === updated.id || m.recipientUsername === currentUser.username) {
+        rName = updated.username;
+        changed = true;
+      }
+      return changed ? { ...m, senderUsername: sName, senderAvatar: sAv, recipientUsername: rName } : m;
+    }));
+
+    // 2. Persist to server via PUT /api/users/:id
+    try {
+      const res = await fetch(`/api/users/${currentUser.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || currentUser.id}`,
+          'x-user-id': currentUser.id,
+        },
+        body: JSON.stringify({
+          username: updated.username,
+          bio: updated.bio,
+          avatar: updated.avatar,
+          privacy: updated.privacy,
+        }),
+      });
+
+      if (res.ok) {
+        const resData = await res.json();
+        if (resData.user) {
+          StorageEngine.saveUser(resData.user);
+          setCurrentUser(resData.user);
+        }
+      }
+    } catch {
+      // offline fallback, already saved locally
+    }
+
     refreshData();
+    return { success: true, message: 'Профилът и снимката бяха обновени успешно!' };
   };
 
   // Social
@@ -685,22 +774,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // Direct Messages
-  const sendDirectMessage = (recipientUserId: string, content: string): { success: boolean; message?: string } => {
+  const sendDirectMessage = async (recipientUserId: string, content: string): Promise<{ success: boolean; message?: string }> => {
     if (!currentUser) return { success: false, message: 'Необходимо е влизане в профила' };
-    if (!content.trim()) return { success: false, message: 'Съобщението не може да бъде празно' };
-    const recipient = StorageEngine.getUserById(recipientUserId);
+    const trimmed = content.trim();
+    if (!trimmed) return { success: false, message: 'Съобщението не може да бъде празно' };
+
+    // Resolve recipient user from allUsers or Storage
+    const recipient = allUsers.find(
+      u => u.id === recipientUserId || u.username.toLowerCase() === recipientUserId.toLowerCase() || u.email.toLowerCase() === recipientUserId.toLowerCase()
+    ) || StorageEngine.getUserById(recipientUserId);
+
     if (!recipient) return { success: false, message: 'Потребителят не съществува' };
 
-    StorageEngine.sendDirectMessage(currentUser, recipient, content);
+    // 1. Instantly save in local storage & React state for instant UI update
+    const newMsg = StorageEngine.sendDirectMessage(currentUser, recipient, trimmed);
+    setDirectMessages(StorageEngine.getMessages());
+    refreshData();
 
-    fetch('/api/social/message', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || currentUser.id}`,
-      },
-      body: JSON.stringify({ recipientId: recipientUserId, content }),
-    }).catch(() => {});
+    // 2. Transmit to server
+    try {
+      const res = await fetch('/api/social/message', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('iptv_auth_token') || currentUser.id}`,
+          'x-user-id': currentUser.id,
+        },
+        body: JSON.stringify({ recipientId: recipient.id, content: trimmed }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.message) {
+          StorageEngine.syncDirectMessages([data.message]);
+          setDirectMessages(StorageEngine.getMessages());
+        }
+      }
+    } catch {
+      // offline fallback, already stored locally
+    }
 
     refreshData();
     return { success: true };
@@ -708,7 +820,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const getConversation = (otherUserId: string): DirectMessage[] => {
     if (!currentUser) return [];
-    return StorageEngine.getConversation(currentUser.id, otherUserId);
+    const otherUser = allUsers.find(u => u.id === otherUserId) || StorageEngine.getUserById(otherUserId);
+    return StorageEngine.getConversation(currentUser.id, otherUserId, currentUser.username, otherUser?.username);
   };
 
   const markConversationAsRead = (otherUserId: string) => {
@@ -1017,6 +1130,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         toggleFollow,
         isFriend,
         isFollowing,
+        directMessages,
         sendDirectMessage,
         getConversation,
         markConversationAsRead,

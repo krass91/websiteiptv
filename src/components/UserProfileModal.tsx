@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from '../services/authContext';
 import { StorageEngine } from '../services/storage';
 import { User, Post, DirectMessage } from '../types';
@@ -42,6 +42,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
     currentUser, 
     allUsers,
     allPosts,
+    directMessages,
     sendFriendRequest, 
     respondFriendRequest, 
     removeFriend, 
@@ -100,7 +101,18 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const followersCount = StorageEngine.getFollowersOfUser(targetUser.id).length;
   const followingCount = StorageEngine.getFollowingOfUser(targetUser.id).length;
 
-  const conversation: DirectMessage[] = currentUser ? getConversation(targetUser.id) : [];
+  const conversation: DirectMessage[] = useMemo(() => {
+    if (!currentUser || !targetUser) return [];
+    const all = directMessages.length > 0 ? directMessages : StorageEngine.getMessages();
+    return all
+      .filter(m => 
+        (m.senderId === currentUser.id && m.recipientId === targetUser.id) ||
+        (m.senderId === targetUser.id && m.recipientId === currentUser.id) ||
+        (m.senderUsername?.toLowerCase() === currentUser.username.toLowerCase() && m.recipientUsername?.toLowerCase() === targetUser.username.toLowerCase()) ||
+        (m.senderUsername?.toLowerCase() === targetUser.username.toLowerCase() && m.recipientUsername?.toLowerCase() === currentUser.username.toLowerCase())
+      )
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [currentUser, targetUser, directMessages]);
 
   const triggerFeedback = (text: string, error = false) => {
     setFeedback({ text, error });
@@ -119,12 +131,13 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
     triggerFeedback(nowFollowing ? `Вече следвате ${targetUser.username}` : `Спряхте да следвате ${targetUser.username}`);
   };
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !chatMessage.trim()) return;
-    const res = sendDirectMessage(targetUser.id, chatMessage.trim());
+    const textToSend = chatMessage.trim();
+    setChatMessage('');
+    const res = await sendDirectMessage(targetUser.id, textToSend);
     if (res.success) {
-      setChatMessage('');
       setTimeout(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, 50);

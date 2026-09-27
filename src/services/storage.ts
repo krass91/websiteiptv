@@ -240,36 +240,49 @@ export class StorageEngine {
   static syncUsers(serverUsers: User[]): void {
     if (!Array.isArray(serverUsers) || serverUsers.length === 0) return;
     const localUsers = this.getUsers();
-    const map = new Map<string, User>();
-    
-    // Seed with local users
-    localUsers.forEach(u => map.set(u.id, u));
-    
-    // Merge server users matching by id or email to never duplicate user identities
-    serverUsers.forEach(sUser => {
-      const existingByEmail = Array.from(map.values()).find(
-        u => u.email.toLowerCase() === sUser.email.toLowerCase()
-      );
-      if (existingByEmail) {
-        const mergedUser: User = {
-          ...existingByEmail,
-          ...sUser,
-          id: existingByEmail.id, // Strictly preserve user ID!
-        };
-        map.set(existingByEmail.id, mergedUser);
-      } else {
-        map.set(sUser.id, sUser);
+    const currentUser = this.getCurrentUser();
+
+    // Map strictly by lowercased email to NEVER duplicate a user identity
+    const userMap = new Map<string, User>();
+
+    // 1. Load local users
+    localUsers.forEach(u => {
+      if (u?.email) {
+        userMap.set(u.email.toLowerCase(), u);
       }
     });
 
-    const merged = Array.from(map.values());
-    this.set(STORAGE_KEYS.USERS, merged);
+    // 2. Merge server users
+    serverUsers.forEach(sUser => {
+      if (!sUser?.email) return;
+      const cleanEmail = sUser.email.toLowerCase();
+      const existing = userMap.get(cleanEmail);
 
-    const current = this.getCurrentUser();
-    if (current) {
-      const match = map.get(current.id) || Array.from(map.values()).find(u => u.email.toLowerCase() === current.email.toLowerCase());
-      if (match) {
-        this.setCurrentUser({ ...current, ...match, id: current.id });
+      if (existing) {
+        // If this is the current active user, ensure their freshly edited profile isn't overwritten by stale server polling
+        const isCurrent = currentUser && (currentUser.id === existing.id || currentUser.email.toLowerCase() === cleanEmail);
+        const merged: User = {
+          ...existing,
+          ...sUser,
+          id: existing.id, // Strictly preserve stable local ID
+          username: (isCurrent && currentUser.username) ? currentUser.username : (sUser.username || existing.username),
+          avatar: (isCurrent && currentUser.avatar) ? currentUser.avatar : (sUser.avatar || existing.avatar),
+          bio: (isCurrent && currentUser.bio !== undefined) ? currentUser.bio : (sUser.bio ?? existing.bio),
+          privacy: { ...existing.privacy, ...(sUser.privacy || {}) },
+        };
+        userMap.set(cleanEmail, merged);
+      } else {
+        userMap.set(cleanEmail, sUser);
+      }
+    });
+
+    const mergedList = Array.from(userMap.values());
+    this.set(STORAGE_KEYS.USERS, mergedList);
+
+    if (currentUser) {
+      const updatedCurrent = userMap.get(currentUser.email.toLowerCase());
+      if (updatedCurrent) {
+        this.setCurrentUser({ ...currentUser, ...updatedCurrent });
       }
     }
   }
@@ -292,7 +305,10 @@ export class StorageEngine {
       if (m?.id) map.set(m.id, m);
     });
     serverMsgs.forEach(m => {
-      if (m?.id) map.set(m.id, m);
+      if (m?.id) {
+        const existing = map.get(m.id);
+        map.set(m.id, existing ? { ...existing, ...m } : m);
+      }
     });
     const merged = Array.from(map.values()).sort(
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
@@ -325,7 +341,18 @@ export class StorageEngine {
     } else {
       users.push(updatedUser);
     }
-    this.set(STORAGE_KEYS.USERS, users);
+
+    // Strictly eliminate any duplicate entries with the same email
+    const uniqueUsers: User[] = [];
+    const seenEmails = new Set<string>();
+    for (const u of users) {
+      const email = u.email.toLowerCase();
+      if (!seenEmails.has(email)) {
+        seenEmails.add(email);
+        uniqueUsers.push(u);
+      }
+    }
+    this.set(STORAGE_KEYS.USERS, uniqueUsers);
 
     // Update current user if matching
     const current = this.getCurrentUser();
@@ -337,14 +364,14 @@ export class StorageEngine {
     const posts = this.getPosts();
     let postsChanged = false;
     posts.forEach(p => {
-      if (p.userId === updatedUser.id || (oldUser && p.userId === oldUser.id)) {
+      if (p.userId === updatedUser.id || (oldUser && p.userId === oldUser.id) || (oldUser && p.authorName === oldUser.username)) {
         p.authorName = updatedUser.username;
         p.authorAvatar = updatedUser.avatar;
         postsChanged = true;
       }
       if (Array.isArray(p.comments)) {
         p.comments.forEach(c => {
-          if (c.userId === updatedUser.id || (oldUser && c.userId === oldUser.id)) {
+          if (c.userId === updatedUser.id || (oldUser && c.userId === oldUser.id) || (oldUser && c.username === oldUser.username)) {
             c.username = updatedUser.username;
             c.userAvatar = updatedUser.avatar;
             postsChanged = true;
@@ -360,12 +387,12 @@ export class StorageEngine {
     const msgs = this.getMessages();
     let msgsChanged = false;
     msgs.forEach(m => {
-      if (m.senderId === updatedUser.id || (oldUser && m.senderId === oldUser.id)) {
+      if (m.senderId === updatedUser.id || (oldUser && m.senderId === oldUser.id) || (oldUser && m.senderUsername === oldUser.username)) {
         m.senderUsername = updatedUser.username;
         m.senderAvatar = updatedUser.avatar;
         msgsChanged = true;
       }
-      if (m.recipientId === updatedUser.id || (oldUser && m.recipientId === oldUser.id)) {
+      if (m.recipientId === updatedUser.id || (oldUser && m.recipientId === oldUser.id) || (oldUser && m.recipientUsername === oldUser.username)) {
         m.recipientUsername = updatedUser.username;
         msgsChanged = true;
       }
@@ -603,10 +630,22 @@ export class StorageEngine {
     return this.get<DirectMessage[]>(STORAGE_KEYS.MESSAGES, []);
   }
 
-  static getConversation(userAId: string, userBId: string): DirectMessage[] {
+  static getConversation(userAId: string, userBId: string, userAName?: string, userBName?: string): DirectMessage[] {
     const all = this.getMessages();
+    const aName = userAName?.toLowerCase();
+    const bName = userBName?.toLowerCase();
+
     return all
-      .filter(m => (m.senderId === userAId && m.recipientId === userBId) || (m.senderId === userBId && m.recipientId === userAId))
+      .filter(m => {
+        const idMatch = (m.senderId === userAId && m.recipientId === userBId) || (m.senderId === userBId && m.recipientId === userAId);
+        if (idMatch) return true;
+        if (aName && bName) {
+          const nameMatch = (m.senderUsername?.toLowerCase() === aName && m.recipientUsername?.toLowerCase() === bName) ||
+                            (m.senderUsername?.toLowerCase() === bName && m.recipientUsername?.toLowerCase() === aName);
+          if (nameMatch) return true;
+        }
+        return false;
+      })
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }
 

@@ -62,6 +62,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     currentUser, 
     allUsers, 
     allPosts, 
+    directMessages,
     updateProfile, 
     sendDirectMessage, 
     markConversationAsRead, 
@@ -83,7 +84,21 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [allowFollowers, setAllowFollowers] = useState(currentUser?.privacy.allowFollowers ?? true);
   const [showEmail, setShowEmail] = useState(currentUser?.privacy.showEmail ?? false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync profile form state whenever currentUser changes
+  useEffect(() => {
+    if (currentUser) {
+      setUsername(currentUser.username);
+      setBio(currentUser.bio || '');
+      setAvatar(currentUser.avatar);
+      setAllowFriendRequests(currentUser.privacy.allowFriendRequests ?? true);
+      setAllowFollowers(currentUser.privacy.allowFollowers ?? true);
+      setShowEmail(currentUser.privacy.showEmail ?? false);
+    }
+  }, [currentUser]);
 
   // Messages Chat state
   const [selectedChatUserId, setSelectedChatUserId] = useState<string | null>(null);
@@ -94,12 +109,23 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   // Group messages into conversations with "кой ми е писал"
   const conversations: ConversationGroup[] = useMemo(() => {
     if (!currentUser) return [];
-    const allMsgs = StorageEngine.getMessages();
-    const myMsgs = allMsgs.filter(m => m.senderId === currentUser.id || m.recipientId === currentUser.id);
+    const allMsgs = directMessages.length > 0 ? directMessages : StorageEngine.getMessages();
+    const myMsgs = allMsgs.filter(m => 
+      m.senderId === currentUser.id || 
+      m.recipientId === currentUser.id ||
+      (m.senderUsername && m.senderUsername.toLowerCase() === currentUser.username.toLowerCase()) ||
+      (m.recipientUsername && m.recipientUsername.toLowerCase() === currentUser.username.toLowerCase())
+    );
 
     const map = new Map<string, DirectMessage[]>();
     for (const m of myMsgs) {
-      const otherId = m.senderId === currentUser.id ? m.recipientId : m.senderId;
+      let otherId = m.senderId === currentUser.id ? m.recipientId : m.senderId;
+      // If otherId equals currentUser.id, resolve by username
+      if (otherId === currentUser.id) {
+        const otherUsername = m.senderUsername.toLowerCase() === currentUser.username.toLowerCase() ? m.recipientUsername : m.senderUsername;
+        const resolvedUser = allUsers.find(u => u.username.toLowerCase() === otherUsername.toLowerCase());
+        if (resolvedUser) otherId = resolvedUser.id;
+      }
       if (!map.has(otherId)) {
         map.set(otherId, []);
       }
@@ -115,7 +141,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         avatar: msgs[0].senderId === currentUser.id ? 'https://api.dicebear.com/7.x/bottts/svg?seed=' + otherId : msgs[0].senderAvatar,
         email: 'user@iptv.net',
         bio: 'Потребител на сайта',
-        role: 'member',
+        role: 'member' as const,
         isVerified: true,
         createdAt: new Date().toISOString(),
         privacy: { allowFriendRequests: true, allowFollowers: true, showEmail: false }
@@ -135,7 +161,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     // Sort by latest message date descending
     result.sort((a, b) => new Date(b.lastMessage.createdAt).getTime() - new Date(a.lastMessage.createdAt).getTime());
     return result;
-  }, [currentUser, allUsers]);
+  }, [currentUser, allUsers, directMessages]);
 
   // Total unread messages for currentUser
   const totalUnreadMessages = useMemo(() => {
@@ -182,27 +208,48 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
   };
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateProfile({
-      username,
-      bio,
-      avatar,
-      privacy: {
-        allowFriendRequests,
-        allowFollowers,
-        showEmail,
-      },
-    });
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 2500);
+    if (isSubmitting) return;
+    setErrorMessage(null);
+    setIsSubmitting(true);
+
+    try {
+      const res = await updateProfile({
+        username: username.trim(),
+        bio: bio.trim(),
+        avatar: avatar.trim(),
+        privacy: {
+          allowFriendRequests,
+          allowFollowers,
+          showEmail,
+        },
+      });
+
+      if (res.success) {
+        setSavedSuccess(true);
+        setTimeout(() => setSavedSuccess(false), 3000);
+      } else if (res.message) {
+        setErrorMessage(res.message);
+      }
+    } catch {
+      setErrorMessage('Възникна грешка при запазване на профила.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!replyText.trim() || !selectedChatUserId) return;
-    sendDirectMessage(selectedChatUserId, replyText.trim());
+    const textToSend = replyText.trim();
     setReplyText('');
+    await sendDirectMessage(selectedChatUserId, textToSend);
+    setTimeout(() => {
+      if (chatScrollRef.current) {
+        chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+      }
+    }, 60);
   };
 
   const myPostsCount = allPosts.filter(p => p.userId === currentUser.id).length;
@@ -689,6 +736,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-400 bg-emerald-950/60 px-3 py-1 rounded-lg border border-emerald-800">
                 <Check className="h-3.5 w-3.5" />
                 <span>Промените са запазени успешно!</span>
+              </span>
+            )}
+            {errorMessage && (
+              <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-400 bg-rose-950/60 px-3 py-1 rounded-lg border border-rose-800">
+                <span>{errorMessage}</span>
               </span>
             )}
           </div>

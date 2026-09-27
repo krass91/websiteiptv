@@ -340,7 +340,7 @@ const authMiddleware = (req: Request, res: Response, next: NextFunction): void =
     if (users.has(xUserId)) {
       userId = xUserId;
     } else {
-      const match = Array.from(users.values()).find(u => u.id === xUserId || u.email.toLowerCase() === xUserId.toLowerCase());
+      const match = Array.from(users.values()).find(u => u.id === xUserId || u.email.toLowerCase() === xUserId.toLowerCase() || u.username.toLowerCase() === xUserId.toLowerCase());
       if (match) userId = match.id;
     }
   }
@@ -355,6 +355,14 @@ const authMiddleware = (req: Request, res: Response, next: NextFunction): void =
     }
   }
 
+  // Fallback 3: check if token matches user ID or email directly
+  if ((!userId || !users.has(userId)) && token) {
+    const match = Array.from(users.values()).find(u => u.id === token || u.email.toLowerCase() === token.toLowerCase());
+    if (match) {
+      userId = match.id;
+    }
+  }
+
   if (!userId || !users.has(userId)) {
     res.status(401).json({
       error: 'Невалидна сесия. Моля влезте отново в профила си.',
@@ -363,7 +371,12 @@ const authMiddleware = (req: Request, res: Response, next: NextFunction): void =
     return;
   }
 
-  (req as any).user = users.get(userId);
+  const matchedUser = users.get(userId)!;
+  if (token && !sessions.has(token)) {
+    sessions.set(token, matchedUser.id);
+  }
+
+  (req as any).user = matchedUser;
   next();
 };
 
@@ -719,7 +732,8 @@ app.get('/api/social/state', (req: Request, res: Response) => {
 
   let matchedUser = currentUserId ? users.get(currentUserId) : null;
   if (!matchedUser && currentUserId) {
-    matchedUser = Array.from(users.values()).find(u => u.id === currentUserId || u.email.toLowerCase() === currentUserId.toLowerCase());
+    const targetId = currentUserId;
+    matchedUser = Array.from(users.values()).find(u => u.id === targetId || u.email.toLowerCase() === targetId.toLowerCase());
     if (matchedUser) currentUserId = matchedUser.id;
   }
 
@@ -892,6 +906,19 @@ app.post('/api/social/message', authMiddleware, (req: Request, res: Response) =>
   res.status(201).json({ success: true, message: newMsg });
 });
 
+// Social: Get Direct Messages for Current User
+app.get('/api/social/messages', authMiddleware, (req: Request, res: Response) => {
+  const currentUser = (req as any).user as ServerUser;
+  const userMessages = directMessages.filter(m =>
+    m.senderId === currentUser.id ||
+    m.recipientId === currentUser.id ||
+    (m.senderUsername && m.senderUsername.toLowerCase() === currentUser.username.toLowerCase()) ||
+    (m.recipientUsername && m.recipientUsername.toLowerCase() === currentUser.username.toLowerCase())
+  ).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  res.json({ messages: userMessages });
+});
+
 // Social: Toggle Follow
 app.post('/api/social/toggle-follow', authMiddleware, (req: Request, res: Response) => {
   const currentUser = (req as any).user as ServerUser;
@@ -1009,7 +1036,17 @@ app.put('/api/users/:id', authMiddleware, (req: Request, res: Response) => {
   const oldAvatar = target.avatar;
 
   if (username && typeof username === 'string' && username.trim()) {
-    target.username = username.trim();
+    const cleanUsername = username.trim();
+    if (cleanUsername.toLowerCase() !== target.username.toLowerCase()) {
+      const alreadyTaken = Array.from(users.values()).some(
+        u => u.id !== target.id && u.email.toLowerCase() !== target.email.toLowerCase() && u.username.toLowerCase() === cleanUsername.toLowerCase()
+      );
+      if (alreadyTaken) {
+        res.status(409).json({ error: 'Потребителското име вече е заето от друг профил.' });
+        return;
+      }
+    }
+    target.username = cleanUsername;
   }
   if (bio !== undefined && typeof bio === 'string') {
     target.bio = bio.trim();
@@ -1023,7 +1060,7 @@ app.put('/api/users/:id', authMiddleware, (req: Request, res: Response) => {
 
   users.set(target.id, target);
 
-  // Cascade updates to all posts created by this user
+  // Cascade updates to all posts, comments, friendRequests, directMessages, and notifications
   if (target.username !== oldUsername || target.avatar !== oldAvatar) {
     for (const p of posts.values()) {
       if (p.userId === target.id || p.authorName === oldUsername) {
@@ -1042,7 +1079,7 @@ app.put('/api/users/:id', authMiddleware, (req: Request, res: Response) => {
 
     // Cascade to friendRequests
     for (const fr of friendRequests.values()) {
-      if (fr.fromUserId === target.id && fr.fromUser) {
+      if (fr.fromUserId === target.id || (fr.fromUser && fr.fromUser.username === oldUsername)) {
         fr.fromUser.username = target.username;
         fr.fromUser.avatar = target.avatar;
       }
@@ -1056,6 +1093,14 @@ app.put('/api/users/:id', authMiddleware, (req: Request, res: Response) => {
       }
       if (msg.recipientId === target.id || msg.recipientUsername === oldUsername) {
         msg.recipientUsername = target.username;
+      }
+    }
+
+    // Cascade to notifications
+    for (const notif of notifications) {
+      if (notif.fromUser && (notif.fromUser.id === target.id || notif.fromUser.username === oldUsername)) {
+        notif.fromUser.username = target.username;
+        notif.fromUser.avatar = target.avatar;
       }
     }
   }
